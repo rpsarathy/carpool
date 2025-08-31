@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carpool"
+version = "0.1.0"
+description = "A modern Python project scaffold using the src/ layout."
+readme = "README.md"
+authors = [
+  { name = "Your Name", email = "you@example.com" }
+]
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = [
+  "click>=8.1"
+]
+keywords = ["carpool", "cli", "template", "scaffold"]
+
+[project.urls]
+Homepage = "https://example.com/carpool"
+Repository = "https://example.com/carpool/repo"
+
+[project.scripts]
+carpool = "carpool.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7",
+  "pytest-cov>=4",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.coverage.run]
+branch = true
+source = ["carpool"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-q"
+testpaths = [
+  "tests"
+]
