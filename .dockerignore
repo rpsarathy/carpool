@@ -1,0 +1,28 @@
+# VCS
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+.venv
+venv
+
+# Node
+node_modules
+npm-debug.log*
+yarn.lock
+
+# Frontend build artifacts
+web/node_modules
+web/dist
+web/.vite
+
+# OS/editor
+.DS_Store
+.idea
+.vscode
+
+# Tests & caches
+pytest_cache
+.coverage

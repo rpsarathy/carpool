@@ -1,0 +1,1 @@
+{"groups": {"2": {"name": "NewPort Car Pool", "members": ["Partha", "Ranga", "Pankaj", "Depak", "Krishna"], "days": ["Wednesday", "Thursday", "Friday"], "cycle_days": 30}, "3": {"name": "Arnav CarPool", "members": [{"name": "Arnav", "email": "arnav.sarathy17@gmail.com"}], "days": ["Monday", "Tuesday"], "cycle_days": 10}}}

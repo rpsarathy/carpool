@@ -1,0 +1,21 @@
+substitutions:
+  _VITE_API_BASE: ""
+  _SERVICE: ""
+  _REGION: ""
+
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'web/Dockerfile.web', '--build-arg', 'VITE_API_BASE=${_VITE_API_BASE}', '-t', '${_IMAGE}', '.']
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'Deploy to Cloud Run'
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_IMAGE}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8080
+images:
+  - '${_IMAGE}'

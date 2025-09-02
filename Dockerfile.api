@@ -1,0 +1,30 @@
+# Backend (FastAPI) container for Cloud Run
+FROM python:3.11-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=8000 \
+    PYTHONPATH=/app/src
+
+WORKDIR /app
+
+# Install system deps (if any)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+# Copy only what we need
+COPY pyproject.toml /app/
+COPY src /app/src
+COPY data /app/data
+
+# Install runtime deps directly (simplify; avoids needing build backend)
+# NOTE: match your app deps
+RUN pip install --upgrade pip \
+    && pip install fastapi uvicorn[standard] tinydb pydantic
+
+EXPOSE 8000
+
+# Cloud Run will set $PORT; default to 8000 for local
+CMD exec uvicorn carpool.api:app --host 0.0.0.0 --port ${PORT}
