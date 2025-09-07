@@ -1,11 +1,14 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from tinydb import TinyDB, Query
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
+import re
+import hashlib
+import os
 
 # Initialize FastAPI app
 app = FastAPI(title="Carpool API", version="0.1.0")
@@ -29,6 +32,8 @@ DB_PATH = DATA_DIR / "db.json"
 # Initialize TinyDB
 _db = TinyDB(DB_PATH)
 Groups = _db.table("groups")
+OnDemand = _db.table("on_demand_requests")
+Users = _db.table("users")
 Q = Query()
 
 WEEKDAY_NAME_TO_INDEX = {
@@ -38,6 +43,70 @@ WEEKDAY_NAME_TO_INDEX = {
     "Thursday": 3,
     "Friday": 4,
 }
+
+email_re = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def _hash_password(password: str, salt: Optional[str] = None) -> str:
+    salt = salt or os.environ.get("CARPOOL_AUTH_SALT", "carpool-salt")
+    return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+
+class Profile(BaseModel):
+    full_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    username: Optional[str] = None
+    date_of_birth: Optional[str] = None  # ISO date string
+    gender: Optional[str] = None
+    address: Optional[Dict[str, Optional[str]]] = None  # {city,state,zip}
+
+
+class SignupIn(BaseModel):
+    email: str
+    password: str
+    profile: Optional[Profile] = None
+
+    @field_validator("email")
+    @classmethod
+    def email_valid(cls, v: str) -> str:
+        v = v.strip()
+        if not email_re.match(v):
+            raise ValueError("invalid email format")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def password_rules(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("must be at least 8 characters")
+        if not re.search(r"[A-Za-z]", v):
+            raise ValueError("must include at least one letter")
+        if not re.search(r"\d", v):
+            raise ValueError("must include at least one number")
+        if not re.search(r"[!@#$%^&*()_+\-=[\]{};':\"\\|,.<>/?]", v):
+            raise ValueError("must include at least one special character")
+        return v
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+    @field_validator("email")
+    @classmethod
+    def email_valid(cls, v: str) -> str:
+        v = v.strip()
+        if not email_re.match(v):
+            raise ValueError("invalid email format")
+        return v
+
+
+class MeOut(BaseModel):
+    email: str
+    profile: Optional[Profile] = None
+
 
 class Member(BaseModel):
     name: str
@@ -124,6 +193,29 @@ class StoredSchedule(BaseModel):
     items: List[ScheduleItem]
 
 
+class OnDemandRequestIn(BaseModel):
+    origin_lat: float
+    origin_lng: float
+    destination: str
+    dest_lat: float
+    dest_lng: float
+    dest_place_id: Optional[str] = None
+    dest_address: Optional[str] = None
+
+    @field_validator("destination")
+    @classmethod
+    def dest_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("destination cannot be empty")
+        return v
+
+
+class OnDemandRequest(OnDemandRequestIn):
+    id: int
+    created_at: datetime
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
@@ -144,6 +236,159 @@ def _normalize_members(raw_members) -> List[Member]:
             if name:
                 normalized.append(Member(name=name, email=email or None))
     return normalized
+
+
+@app.post("/auth/signup", status_code=201)
+async def auth_signup(req: SignupIn) -> Dict[str, Any]:
+    # Additional per-field validation to mirror frontend rules
+    errors: Dict[str, str] = {}
+    # Require either full_name or first+last
+    prof = req.profile.model_dump() if req.profile else {}
+    has_full = bool((prof.get("full_name") or "").strip())
+    has_first_last = bool((prof.get("first_name") or "").strip()) and bool((prof.get("last_name") or "").strip())
+    if not (has_full or has_first_last):
+        errors["name"] = "Provide either Full Name or First and Last name"
+
+    # Optional phone simple validation
+    phone = (prof.get("phone") or "").strip()
+    if phone and not re.match(r"^[+\d][\d\s().-]{6,}$", phone):
+        errors["phone"] = "Invalid phone number"
+
+    # Optional dob age check
+    dob = prof.get("date_of_birth")
+    if dob:
+        try:
+            y, m, d = map(int, dob.split("-"))
+            born = date(y, m, d)
+            today = date.today()
+            age = today.year - born.year - (today < date(born.year, born.month, born.day))
+            if age < 13:
+                errors["date_of_birth"] = "Must be at least 13 years old"
+        except Exception:
+            errors["date_of_birth"] = "Invalid date format"
+
+    # Optional zip check
+    zipc = (prof.get("address", {}) or {}).get("zip") or ""
+    if zipc and not re.match(r"^\d{5}(-\d{4})?$", zipc):
+        errors["zip"] = "Invalid ZIP code"
+
+    # Enforce unique email
+    if Users.contains(Q.email == req.email):
+        errors["email"] = "Email already registered"
+
+    if errors:
+        raise HTTPException(status_code=422, detail={"errors": errors})
+
+    doc_id = Users.insert({
+        "email": req.email,
+        "password_hash": _hash_password(req.password),
+        "profile": prof,
+        "created_at": datetime.utcnow().isoformat(),
+    })
+    return {"id": doc_id, "email": req.email}
+
+
+@app.post("/auth/login")
+async def auth_login(req: LoginIn) -> Dict[str, Any]:
+    doc = Users.get(Q.email == req.email)
+    if not doc:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if doc.get("password_hash") != _hash_password(req.password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return {"ok": True}
+
+
+@app.get("/auth/me", response_model=MeOut)
+async def auth_me(x_user_email: Optional[str] = Header(default=None, alias="X-User-Email")) -> MeOut:
+    """
+    Demo auth: identify user by X-User-Email header (set by frontend after login).
+    In production, replace with proper sessions/JWT.
+    """
+    if not x_user_email:
+        raise HTTPException(status_code=401, detail="Missing X-User-Email header")
+    doc = Users.get(Q.email == x_user_email)
+    if not doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    prof = doc.get("profile") or None
+    # Normalize address keys presence
+    if prof and isinstance(prof.get("address"), dict):
+        prof["address"] = {
+            "city": prof["address"].get("city"),
+            "state": prof["address"].get("state"),
+            "zip": prof["address"].get("zip"),
+        }
+    return MeOut(email=doc.get("email"), profile=Profile(**prof) if prof else None)
+
+
+def _validate_profile(profile: Dict[str, Any]) -> Dict[str, str]:
+    errors: Dict[str, str] = {}
+    has_full = bool((profile.get("full_name") or "").strip())
+    has_first_last = bool((profile.get("first_name") or "").strip()) and bool((profile.get("last_name") or "").strip())
+    if not (has_full or has_first_last):
+        errors["name"] = "Provide either Full Name or First and Last name"
+
+    phone = (profile.get("phone") or "").strip()
+    if phone and not re.match(r"^[+\d][\d\s().-]{6,}$", phone):
+        errors["phone"] = "Invalid phone number"
+
+    dob = profile.get("date_of_birth")
+    if dob:
+        try:
+            y, m, d = map(int, dob.split("-"))
+            born = date(y, m, d)
+            today = date.today()
+            age = today.year - born.year - (today < date(born.year, born.month, born.day))
+            if age < 13:
+                errors["date_of_birth"] = "Must be at least 13 years old"
+        except Exception:
+            errors["date_of_birth"] = "Invalid date format"
+
+    zipc = (profile.get("address", {}) or {}).get("zip") or ""
+    if zipc and not re.match(r"^\d{5}(-\d{4})?$", zipc):
+        errors["zip"] = "Invalid ZIP code"
+    return errors
+
+
+class ProfilePatch(BaseModel):
+    full_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    username: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    gender: Optional[str] = None
+    address: Optional[Dict[str, Optional[str]]] = None
+
+
+class MePatchIn(BaseModel):
+    profile: ProfilePatch
+
+
+@app.patch("/auth/me", response_model=MeOut)
+async def auth_me_update(payload: MePatchIn, x_user_email: Optional[str] = Header(default=None, alias="X-User-Email")) -> MeOut:
+    if not x_user_email:
+        raise HTTPException(status_code=401, detail="Missing X-User-Email header")
+    doc = Users.get(Q.email == x_user_email)
+    if not doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    existing = doc.get("profile") or {}
+    incoming = payload.profile.model_dump(exclude_unset=True)
+    # Merge
+    merged: Dict[str, Any] = {**existing}
+    for k, v in incoming.items():
+        if k == "address" and isinstance(v, dict):
+            merged_addr = {**(existing.get("address") or {})}
+            merged_addr.update({kk: vv for kk, vv in v.items() if vv is not None})
+            merged["address"] = merged_addr
+        else:
+            merged[k] = v
+
+    errors = _validate_profile(merged)
+    if errors:
+        raise HTTPException(status_code=422, detail={"errors": errors})
+
+    Users.update({"profile": merged}, Q.email == x_user_email)
+    return MeOut(email=x_user_email, profile=Profile(**merged))
 
 
 @app.get("/groups", response_model=List[Group])
@@ -293,6 +538,44 @@ async def generate_schedule(name: str, req: ScheduleRequest) -> List[ScheduleIte
     }, doc_ids=[doc.doc_id])
 
     return schedule
+
+
+@app.post("/on_demand/requests", status_code=201, response_model=OnDemandRequest)
+async def create_on_demand(req: OnDemandRequestIn) -> OnDemandRequest:
+    doc_id = OnDemand.insert({
+        "origin_lat": req.origin_lat,
+        "origin_lng": req.origin_lng,
+        "destination": req.destination,
+        "dest_lat": req.dest_lat,
+        "dest_lng": req.dest_lng,
+        "dest_place_id": req.dest_place_id,
+        "dest_address": req.dest_address,
+        "created_at": datetime.utcnow().isoformat(),
+    })
+    return OnDemandRequest(id=doc_id, created_at=datetime.utcnow(), **req.model_dump())
+
+
+@app.get("/on_demand/requests", response_model=List[OnDemandRequest])
+async def list_on_demand() -> List[OnDemandRequest]:
+    items = OnDemand.all()
+    result: List[OnDemandRequest] = []
+    for doc in items:
+        result.append(
+            OnDemandRequest(
+                id=doc.doc_id,
+                origin_lat=doc.get("origin_lat"),
+                origin_lng=doc.get("origin_lng"),
+                destination=doc.get("destination", ""),
+                dest_lat=doc.get("dest_lat"),
+                dest_lng=doc.get("dest_lng"),
+                dest_place_id=doc.get("dest_place_id"),
+                dest_address=doc.get("dest_address"),
+                created_at=datetime.fromisoformat(doc.get("created_at")) if isinstance(doc.get("created_at"), str) else (doc.get("created_at") or datetime.utcnow()),
+            )
+        )
+    # Sort newest first
+    result.sort(key=lambda r: r.created_at, reverse=True)
+    return result
 
 
 # Optional root route for quick check

@@ -15,6 +15,14 @@ COPY web/ ./
 ARG VITE_API_BASE
 ENV VITE_API_BASE=${VITE_API_BASE}
 
+# Accept Google Maps key at build time
+ARG VITE_GOOGLE_MAPS_API_KEY
+ENV VITE_GOOGLE_MAPS_API_KEY=${VITE_GOOGLE_MAPS_API_KEY}
+
+# Accept Google API key at build time (baked into bundle)
+ARG VITE_GOOGLE_API_KEY
+ENV VITE_GOOGLE_API_KEY=${VITE_GOOGLE_API_KEY}
+
 # Build
 RUN npm run build
 

@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { API_BASE } from '../config'
+import { useNavigate } from 'react-router-dom'
 
 export default function Login() {
+  const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -28,6 +30,10 @@ export default function Login() {
         throw new Error(body.detail || `Login failed: ${res.status}`)
       }
       setSuccess('Logged in!')
+      // Frontend-only gate: mark user as authenticated
+      localStorage.setItem('auth_user', email.trim())
+      // Navigate home so actions become enabled
+      navigate('/')
     } catch (e: any) {
       setError(e.message)
     } finally {

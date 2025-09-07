@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
-import { API_BASE } from './config'
+import { API_BASE, GOOGLE_API_KEY } from './config'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
+import MyAccount from './pages/MyAccount'
+
+// Minimal ambient to prevent TS errors when Google JS hasn't loaded at type-check time
+declare const google: any
 
 interface Member {
   name: string
@@ -29,6 +34,7 @@ interface StoredSchedule {
 }
 
 export default function App() {
+  const navigate = useNavigate()
   type Mode = 'regular' | 'on_demand'
   const [mode, setMode] = useState<Mode>('regular')
   const [name, setName] = useState('')
@@ -44,6 +50,53 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [schedError, setSchedError] = useState<string | null>(null)
+  const [odDest, setOdDest] = useState<string>('')
+  const [odOrigin, setOdOrigin] = useState<{ lat: number; lng: number } | null>(null)
+  const [odDestCoord, setOdDestCoord] = useState<{ lat: number; lng: number } | null>(null)
+  const [odStatus, setOdStatus] = useState<string | null>(null)
+  const [odError, setOdError] = useState<string | null>(null)
+  const [odRequests, setOdRequests] = useState<Array<{ id: number; origin_lat: number; origin_lng: number; destination: string; dest_lat: number; dest_lng: number; created_at: string }>>([])
+  const [odSearch, setOdSearch] = useState('')
+  const [odPage, setOdPage] = useState(1)
+  const [odPageSize, setOdPageSize] = useState(10)
+  const [originAddrCache, setOriginAddrCache] = useState<Record<string, string>>({})
+
+  // Google Places Autocomplete state (widget-based)
+  const [gPlacesReady, setGPlacesReady] = useState(false)
+  const destInputRef = useRef<HTMLInputElement | null>(null)
+  const autocompleteRef = useRef<any>(null)
+  const [odDestPlaceId, setOdDestPlaceId] = useState<string | null>(null)
+  const [odDestAddress, setOdDestAddress] = useState<string | null>(null)
+
+  // Simple frontend auth gate
+  const [authed, setAuthed] = useState<boolean>(() => !!localStorage.getItem('auth_user'))
+  const [meName, setMeName] = useState<string | null>(null)
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'auth_user') setAuthed(!!localStorage.getItem('auth_user'))
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  // Fetch current user profile to show name in header
+  useEffect(() => {
+    if (!authed) { setMeName(null); return }
+    const email = localStorage.getItem('auth_user')
+    if (!email) { setMeName(null); return }
+    ;(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/auth/me`, { headers: { 'X-User-Email': email } })
+        if (!res.ok) return
+        const data = await res.json()
+        const p = data?.profile || {}
+        const name = p.full_name || [p.first_name, p.last_name].filter(Boolean).join(' ') || data?.email || null
+        setMeName(name)
+      } catch {
+        setMeName(null)
+      }
+    })()
+  }, [authed])
 
   const cleanedMembers = useMemo(() =>
     members
@@ -112,6 +165,92 @@ export default function App() {
     }
     fetchSaved()
   }, [selectedGroup])
+
+  useEffect(() => {
+    if (mode !== 'on_demand') return
+    ;(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/on_demand/requests`)
+        if (!res.ok) throw new Error(`Failed to load requests: ${res.status}`)
+        const data = await res.json()
+        setOdRequests(data)
+        setOdPage(1)
+      } catch (e: any) {
+        console.warn(e)
+      }
+    })()
+  }, [mode])
+
+  // Load Google Maps JS with Places library when needed
+  useEffect(() => {
+    if (mode !== 'on_demand') return
+    if (gPlacesReady) return
+    if (!GOOGLE_API_KEY) return
+    const exists = document.querySelector('script[data-g-places="1"]') as HTMLScriptElement | null
+    if (exists) {
+      if ((window as any).google?.maps?.places) setGPlacesReady(true)
+      return
+    }
+    const s = document.createElement('script')
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_API_KEY}&libraries=places&v=weekly`
+    s.async = true
+    s.defer = true
+    s.dataset.gPlaces = '1'
+    s.onload = () => {
+      if ((window as any).google?.maps?.places) setGPlacesReady(true)
+    }
+    s.onerror = () => {
+      console.warn('Failed to load Google Maps JS')
+    }
+    document.head.appendChild(s)
+  }, [mode, gPlacesReady])
+
+  // Initialize Places Autocomplete widget on destination input
+  useEffect(() => {
+    if (!gPlacesReady) return
+    if (!destInputRef.current) return
+    // Avoid re-initialization
+    if (autocompleteRef.current) return
+    try {
+      const ac = new google.maps.places.Autocomplete(destInputRef.current, {
+        // Request needed fields on getPlace()
+        fields: ['place_id', 'formatted_address', 'geometry', 'name'],
+        // Optional: types: ['establishment', 'geocode']
+      })
+      autocompleteRef.current = ac
+      ac.addListener('place_changed', () => {
+        const place = ac.getPlace()
+        if (!place) return
+        const addr = place.formatted_address || place.name || ''
+        const id = place.place_id || null
+        const loc = place.geometry?.location
+        if (addr) setOdDest(addr)
+        if (id) setOdDestPlaceId(id)
+        if (addr) setOdDestAddress(addr)
+        if (loc) {
+          const lat = typeof loc.lat === 'function' ? loc.lat() : (loc as any).lat
+          const lng = typeof loc.lng === 'function' ? loc.lng() : (loc as any).lng
+          setOdDestCoord({ lat, lng })
+          setOdStatus('Destination located')
+        } else {
+          setOdDestCoord(null)
+        }
+      })
+    } catch (e) {
+      console.warn('Failed to init Places Autocomplete', e)
+    }
+  }, [gPlacesReady])
+
+  // Apply location bias near detected origin when it changes
+  useEffect(() => {
+    if (!autocompleteRef.current) return
+    if (!odOrigin) return
+    try {
+      autocompleteRef.current.setOptions({
+        locationBias: { center: { lat: odOrigin.lat, lng: odOrigin.lng }, radiusMeters: 20000 },
+      })
+    } catch {}
+  }, [odOrigin?.lat, odOrigin?.lng])
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -193,7 +332,7 @@ export default function App() {
     const activeUntil = savedSchedule ? new Date(savedSchedule.end_date) : null
     if (activeUntil && new Date() <= activeUntil) {
       setSchedError(`Schedule already active until ${activeUntil.toLocaleDateString()}`)
-      setSchedule(savedSchedule.items)
+      if (savedSchedule) setSchedule(savedSchedule.items)
       return
     }
     try {
@@ -236,6 +375,127 @@ export default function App() {
     }
   }
 
+  async function detectCurrentLocationOd() {
+    setOdError(null)
+    setOdStatus('Detecting current location...')
+    // Use browser geolocation only. Many API keys with HTTP referrer restrictions cannot call Google Geolocation API from the browser.
+    const geoPromise = () => new Promise<GeolocationPosition>((resolve, reject) => {
+      if (!navigator.geolocation) reject(new Error('Geolocation not supported on this browser'))
+      navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000 })
+    })
+    try {
+      const pos = await geoPromise()
+      setOdOrigin({ lat: pos.coords.latitude, lng: pos.coords.longitude })
+      setOdStatus('Current location detected')
+    } catch (e: any) {
+      const msg = e?.message?.toLowerCase?.() || ''
+      if (msg.includes('permission') || msg.includes('denied')) {
+        setOdError('Location permission denied. Please allow location access in your browser settings and try again.')
+      } else if (msg.includes('timeout')) {
+        setOdError('Timed out detecting location. Try again from a spot with better GPS/Wi‑Fi reception.')
+      } else {
+        setOdError('Failed to detect current location on this device')
+      }
+      setOdStatus(null)
+    }
+  }
+
+  // Input change: keep local value in sync and clear previous selection
+  function onDestInputChange(val: string) {
+    setOdDest(val)
+    setOdDestCoord(null)
+    setOdDestPlaceId(null)
+    setOdDestAddress(null)
+  }
+
+  async function submitOnDemandRequestOd() {
+    setOdError(null)
+    setOdStatus('Submitting request...')
+    if (!authed) {
+      setOdError('Please log in to request a carpool')
+      setOdStatus(null)
+      navigate('/login')
+      return
+    }
+    if (!odOrigin) {
+      setOdError('Please detect your current location first')
+      setOdStatus(null)
+      return
+    }
+    if (!odDestCoord || !odDest.trim()) {
+      setOdError('Please enter and geocode a destination')
+      setOdStatus(null)
+      return
+    }
+    try {
+      const res = await fetch(`${API_BASE}/on_demand/requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          origin_lat: odOrigin.lat,
+          origin_lng: odOrigin.lng,
+          destination: odDest.trim(),
+          dest_lat: odDestCoord.lat,
+          dest_lng: odDestCoord.lng,
+          dest_place_id: odDestPlaceId,
+          dest_address: odDestAddress || odDest.trim(),
+        })
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.detail || `Failed to submit request: ${res.status}`)
+      }
+      setOdStatus('Request submitted')
+      // refresh list
+      const list = await fetch(`${API_BASE}/on_demand/requests`).then(r => r.json()).catch(() => [])
+      setOdRequests(Array.isArray(list) ? list : [])
+    } catch (e: any) {
+      setOdError(e.message || 'Failed to submit request')
+      setOdStatus(null)
+    }
+  }
+
+  async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+    const key = `${lat.toFixed(5)},${lng.toFixed(5)}`
+    if (originAddrCache[key]) return originAddrCache[key]
+    try {
+      const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_API_KEY}`
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`Reverse geocode failed: ${res.status}`)
+      const data = await res.json()
+      if (data.status !== 'OK' || !data.results?.length) return null
+      const addr = data.results[0]?.formatted_address || null
+      if (addr) setOriginAddrCache(prev => ({ ...prev, [key]: addr }))
+      return addr
+    } catch (e) {
+      return null
+    }
+  }
+
+  useEffect(() => {
+    if (mode !== 'on_demand' || odRequests.length === 0) return
+    const filtered = odRequests.filter(r => {
+      const q = odSearch.trim().toLowerCase()
+      if (!q) return true
+      const addrKey = `${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`
+      const addr = originAddrCache[addrKey]
+      return (
+        r.destination.toLowerCase().includes(q) ||
+        addr.toLowerCase().includes(q)
+      )
+    })
+    const total = filtered.length
+    const totalPages = Math.max(1, Math.ceil(total / odPageSize))
+    const page = Math.min(odPage, totalPages)
+    const start = (page - 1) * odPageSize
+    const pageItems = filtered.slice(start, start + odPageSize)
+    // Prefetch reverse geocodes in parallel (best-effort)
+    pageItems.forEach(item => {
+      const key = `${item.origin_lat.toFixed(5)},${item.origin_lng.toFixed(5)}`
+      if (!originAddrCache[key]) reverseGeocode(item.origin_lat, item.origin_lng)
+    })
+  }, [mode, odRequests, odSearch, odPage, odPageSize])
+
   function Nav() {
     const loc = useLocation()
     const isActive = (path: string) => (loc.pathname === path ? { background: '#eef2ff', color: '#1f3a8a' } : {})
@@ -251,7 +511,23 @@ export default function App() {
             </Link>
           </>
         )}
+        {mode === 'on_demand' && (
+          <>
+            <Link to="/on-demand" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/on-demand') }}>
+              Request Carpool
+            </Link>
+            <Link to="/on-demand/manage" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/on-demand/manage') }}>
+              Manage On-Demand
+            </Link>
+          </>
+        )}
         <span style={{ flex: 1 }} />
+        {authed && meName && (
+          <span style={{ alignSelf: 'center', color: '#333' }}>Welcome, {meName}</span>
+        )}
+        <Link to="/account" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/account') }}>
+          My Account
+        </Link>
         <Link to="/login" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/login') }}>
           Log in
         </Link>
@@ -278,12 +554,7 @@ export default function App() {
         </div>
         <Nav />
 
-        {/* When On-Demand is selected, show placeholder and hide regular routes UI */}
-        {mode === 'on_demand' ? (
-          <div style={{ padding: '0.75rem', borderRadius: 8, background: '#fff7ed', border: '1px solid #fed7aa', color: '#7c2d12', marginBottom: '0.5rem' }}>
-            On-Demand carpool scheduling is coming soon. For now, switch back to Regular to manage carpool details and generate a recurring schedule.
-          </div>
-        ) : null}
+        {/* On-demand UI is rendered in Routes under /on-demand and /on-demand/manage */}
 
         <Routes>
           <Route path="/" element={<Navigate to={mode === 'regular' ? '/details' : '/login'} replace />} />
@@ -457,6 +728,125 @@ export default function App() {
               </div>
             } />
           )}
+          <Route path="/on-demand" element={
+            <div style={{ display: 'grid', gap: '0.75rem' }}>
+              <h2>Request Carpool (On-Demand)</h2>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button type="button" onClick={detectCurrentLocationOd} style={{ padding: '0.5rem 0.75rem', borderRadius: 6 }}>Use My Current Location</button>
+                {odOrigin && (
+                  <a href={`https://www.google.com/maps?q=${odOrigin.lat},${odOrigin.lng}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+                    View Origin on Maps ↗
+                  </a>
+                )}
+              </div>
+
+              <label style={{ display: 'grid', gap: '0.25rem' }}>
+                <span>Destination</span>
+                <input
+                  ref={destInputRef}
+                  value={odDest}
+                  onChange={e => onDestInputChange(e.target.value)}
+                  placeholder="Start typing a destination..."
+                  autoComplete="off"
+                  style={{ width: '100%', padding: '0.5rem', borderRadius: 6, border: '1px solid #ccc' }}
+                />
+              </label>
+              {odDestCoord && (
+                <div style={{ marginTop: 6 }}>
+                  <a href={`https://www.google.com/maps?q=${odDestCoord.lat},${odDestCoord.lng}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+                    View Destination on Maps ↗
+                  </a>
+                </div>
+              )}
+              <div>
+                <button
+                  type="button"
+                  onClick={submitOnDemandRequestOd}
+                  disabled={!authed || !odOrigin || !odDestCoord}
+                  style={{ padding: '0.6rem 1rem', borderRadius: 6 }}
+                >
+                  {authed ? 'Request Carpool' : 'Log in to Request'}
+                </button>
+                {!authed && (
+                  <span style={{ marginLeft: 8, fontSize: 13 }}>
+                    <Link to="/login">Log in</Link> or <Link to="/signup">Sign up</Link> to request a carpool
+                  </span>
+                )}
+              </div>
+
+              {odError && <div style={{ color: '#b00020' }}>{odError}</div>}
+              {odStatus && <div style={{ color: '#0a7d28' }}>{odStatus}</div>}
+            </div>
+          } />
+          <Route path="/on-demand/manage" element={
+            <div style={{ display: 'grid', gap: '0.75rem' }}>
+              <h2>Manage On-Demand Requests</h2>
+              {/* Manage toolbar */}
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                <input
+                  placeholder="Search destination or origin address..."
+                  value={odSearch}
+                  onChange={e => { setOdSearch(e.target.value); setOdPage(1) }}
+                  style={{ flex: '1 1 260px', minWidth: 200, padding: '0.5rem', borderRadius: 6, border: '1px solid #ccc' }}
+                />
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <span>Page size</span>
+                  <select value={odPageSize} onChange={e => { setOdPageSize(parseInt(e.target.value)); setOdPage(1) }} style={{ padding: '0.35rem 0.5rem', borderRadius: 6, border: '1px solid #ccc', background: 'white' }}>
+                    <option value={5}>5</option>
+                    <option value={10}>10</option>
+                    <option value={20}>20</option>
+                  </select>
+                </label>
+              </div>
+
+              {/* List with pagination */}
+              {(() => {
+                const q = odSearch.trim().toLowerCase()
+                const filtered = odRequests.filter(r => {
+                  const addr = originAddrCache[`${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`] || ''
+                  return !q || r.destination.toLowerCase().includes(q) || addr.toLowerCase().includes(q)
+                })
+                const total = filtered.length
+                const totalPages = Math.max(1, Math.ceil(total / odPageSize))
+                const page = Math.min(odPage, totalPages)
+                const start = (page - 1) * odPageSize
+                const pageItems = filtered.slice(start, start + odPageSize)
+                return (
+                  <div>
+                    {pageItems.length === 0 ? (
+                      <div>No requests found.</div>
+                    ) : (
+                      <ul style={{ paddingLeft: '1rem' }}>
+                        {pageItems.map((r) => {
+                          const key = `${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`
+                          const addr = originAddrCache[key]
+                          return (
+                            <li key={r.id}>
+                              <strong>{new Date(r.created_at).toLocaleString()}</strong>
+                              {' — To '}{r.destination}
+                              {' — Origin: '}
+                              {addr ? (
+                                <span>{addr}</span>
+                              ) : (
+                                <a href={`https://www.google.com/maps?q=${r.origin_lat},${r.origin_lng}`} target="_blank" rel="noreferrer">{r.origin_lat.toFixed(5)},{r.origin_lng.toFixed(5)}</a>
+                              )}
+                              {' — Dest: '}<a href={`https://www.google.com/maps?q=${r.dest_lat},${r.dest_lng}`} target="_blank" rel="noreferrer">{r.dest_lat.toFixed(5)},{r.dest_lng.toFixed(5)}</a>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+                      <button type="button" disabled={page <= 1} onClick={() => setOdPage(p => Math.max(1, p - 1))} style={{ padding: '0.35rem 0.6rem', borderRadius: 6 }}>Prev</button>
+                      <span>Page {page} / {totalPages} ({total} total)</span>
+                      <button type="button" disabled={page >= totalPages} onClick={() => setOdPage(p => Math.min(totalPages, p + 1))} style={{ padding: '0.35rem 0.6rem', borderRadius: 6 }}>Next</button>
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+          } />
+          <Route path="/account" element={<MyAccount />} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
 
