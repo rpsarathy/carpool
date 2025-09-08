@@ -13,12 +13,17 @@ import os
 # Initialize FastAPI app
 app = FastAPI(title="Carpool API", version="0.1.0")
 
-# Configure CORS for local dev (Vite default port 5173)
+# Configure CORS for local dev and production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"],
+    allow_origins=[
+        "http://localhost:5173", 
+        "http://127.0.0.1:5173",
+        "https://carpool-web-dzxkfcfuiq-uc.a.run.app",
+        "*"
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
 
