@@ -499,9 +499,17 @@ export default function App() {
   function Nav() {
     const loc = useLocation()
     const isActive = (path: string) => (loc.pathname === path ? { background: '#eef2ff', color: '#1f3a8a' } : {})
+    
+    const handleLogout = () => {
+      localStorage.removeItem('auth_user')
+      setAuthed(false)
+      setMeName(null)
+      navigate('/login')
+    }
+    
     return (
       <nav style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-        {mode === 'regular' && (
+        {authed && mode === 'regular' && (
           <>
             <Link to="/details" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/details') }}>
               Car Pool Details
@@ -511,7 +519,7 @@ export default function App() {
             </Link>
           </>
         )}
-        {mode === 'on_demand' && (
+        {authed && mode === 'on_demand' && (
           <>
             <Link to="/on-demand" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/on-demand') }}>
               Request Carpool
@@ -525,15 +533,28 @@ export default function App() {
         {authed && meName && (
           <span style={{ alignSelf: 'center', color: '#333' }}>Welcome, {meName}</span>
         )}
-        <Link to="/account" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/account') }}>
-          My Account
-        </Link>
-        <Link to="/login" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/login') }}>
-          Log in
-        </Link>
-        <Link to="/signup" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/signup') }}>
-          Sign up
-        </Link>
+        {authed ? (
+          <>
+            <Link to="/account" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/account') }}>
+              My Account
+            </Link>
+            <button 
+              onClick={handleLogout} 
+              style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', backgroundColor: 'transparent', color: '#111', cursor: 'pointer', textDecoration: 'none' }}
+            >
+              Log out
+            </button>
+          </>
+        ) : (
+          <>
+            <Link to="/login" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/login') }}>
+              Log in
+            </Link>
+            <Link to="/signup" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/signup') }}>
+              Sign up
+            </Link>
+          </>
+        )}
       </nav>
     )
   }
@@ -557,8 +578,8 @@ export default function App() {
         {/* On-demand UI is rendered in Routes under /on-demand and /on-demand/manage */}
 
         <Routes>
-          <Route path="/" element={<Navigate to={mode === 'regular' ? '/details' : '/login'} replace />} />
-          {mode === 'regular' && (
+          <Route path="/" element={<Navigate to={authed ? (mode === 'regular' ? '/details' : '/on-demand') : '/login'} replace />} />
+          {mode === 'regular' && authed && (
             <Route path="/details" element={
               <form onSubmit={onSubmit} style={{ display: 'grid', gap: '0.75rem', marginBottom: '1.5rem' }}>
                 <label style={{ display: 'grid', gap: '0.25rem' }}>
@@ -575,7 +596,7 @@ export default function App() {
                 <div style={{ display: 'grid', gap: '0.5rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span>Members</span>
-                    <button type="button" onClick={addMemberRow} style={{ padding: '0.35rem 0.65rem', borderRadius: 6 }}>+ Add member</button>
+                    <button type="button" onClick={addMemberRow} style={{ padding: '0.35rem 0.65rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: 'pointer' }}>+ Add member</button>
                   </div>
                   <div style={{ display: 'grid', gap: '0.5rem' }}>
                     {members.map((m, idx) => (
@@ -593,7 +614,7 @@ export default function App() {
                           onChange={e => updateMember(idx, 'email', e.target.value)}
                           style={{ flex: '1 1 260px', minWidth: 0, padding: '0.5rem', borderRadius: 6, border: '1px solid #ccc' }}
                         />
-                        <button type="button" onClick={() => removeMember(idx)} aria-label="Remove member" style={{ padding: '0.4rem 0.6rem', borderRadius: 6, whiteSpace: 'nowrap' }}>Remove</button>
+                        <button type="button" onClick={() => removeMember(idx)} aria-label="Remove member" style={{ padding: '0.4rem 0.6rem', borderRadius: 6, whiteSpace: 'nowrap', backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: 'pointer' }}>Remove</button>
                       </div>
                     ))}
                   </div>
@@ -629,7 +650,7 @@ export default function App() {
                   </select>
                 </label>
 
-                <button type="submit" disabled={loading} style={{ padding: '0.6rem 1rem', borderRadius: 6 }}>
+                <button type="submit" disabled={loading} style={{ padding: '0.6rem 1rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: loading ? 'not-allowed' : 'pointer' }}>
                   {loading ? 'Saving...' : 'Create carpool'}
                 </button>
 
@@ -662,7 +683,7 @@ export default function App() {
                             <> — Cycle: {g.cycle_days} days</>
                           ) : null}
                         </div>
-                        <button type="button" onClick={() => onDeleteGroup(g.name)} style={{ padding: '0.4rem 0.6rem', borderRadius: 6 }}>Delete</button>
+                        <button type="button" onClick={() => onDeleteGroup(g.name)} style={{ padding: '0.4rem 0.6rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: 'pointer' }}>Delete</button>
                       </li>
                     ))}
                   </ul>
@@ -670,7 +691,7 @@ export default function App() {
               </form>
             } />
           )}
-          {mode === 'regular' && (
+          {mode === 'regular' && authed && (
             <Route path="/schedule" element={
               <div style={{ display: 'grid', gap: '0.75rem' }}>
                 <label style={{ display: 'grid', gap: '0.25rem', maxWidth: 360 }}>
@@ -698,7 +719,7 @@ export default function App() {
                         savedSchedule ? (new Date() <= new Date(savedSchedule.end_date)) : false
                       )
                     }
-                    style={{ padding: '0.6rem 1rem', borderRadius: 6 }}
+                    style={{ padding: '0.6rem 1rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: (loading || groups.length === 0 || (savedSchedule ? (new Date() <= new Date(savedSchedule.end_date)) : false)) ? 'not-allowed' : 'pointer' }}
                   >
                     {loading ? 'Generating...' : 'Generate schedule'}
                   </button>
@@ -728,129 +749,133 @@ export default function App() {
               </div>
             } />
           )}
-          <Route path="/on-demand" element={
-            <div style={{ display: 'grid', gap: '0.75rem' }}>
-              <h2>Request Carpool (On-Demand)</h2>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <button type="button" onClick={detectCurrentLocationOd} style={{ padding: '0.5rem 0.75rem', borderRadius: 6 }}>Use My Current Location</button>
-                {odOrigin && (
-                  <a href={`https://www.google.com/maps?q=${odOrigin.lat},${odOrigin.lng}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
-                    View Origin on Maps ↗
-                  </a>
-                )}
-              </div>
-
-              <label style={{ display: 'grid', gap: '0.25rem' }}>
-                <span>Destination</span>
-                <input
-                  ref={destInputRef}
-                  value={odDest}
-                  onChange={e => onDestInputChange(e.target.value)}
-                  placeholder="Start typing a destination..."
-                  autoComplete="off"
-                  style={{ width: '100%', padding: '0.5rem', borderRadius: 6, border: '1px solid #ccc' }}
-                />
-              </label>
-              {odDestCoord && (
-                <div style={{ marginTop: 6 }}>
-                  <a href={`https://www.google.com/maps?q=${odDestCoord.lat},${odDestCoord.lng}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
-                    View Destination on Maps ↗
-                  </a>
+          {authed && (
+            <Route path="/on-demand" element={
+              <div style={{ display: 'grid', gap: '0.75rem' }}>
+                <h2>Request Carpool (On-Demand)</h2>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button type="button" onClick={detectCurrentLocationOd} style={{ padding: '0.5rem 0.75rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: 'pointer' }}>Use My Current Location</button>
+                  {odOrigin && (
+                    <a href={`https://www.google.com/maps?q=${odOrigin.lat},${odOrigin.lng}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+                      View Origin on Maps ↗
+                    </a>
+                  )}
                 </div>
-              )}
-              <div>
-                <button
-                  type="button"
-                  onClick={submitOnDemandRequestOd}
-                  disabled={!authed || !odOrigin || !odDestCoord}
-                  style={{ padding: '0.6rem 1rem', borderRadius: 6 }}
-                >
-                  {authed ? 'Request Carpool' : 'Log in to Request'}
-                </button>
-                {!authed && (
-                  <span style={{ marginLeft: 8, fontSize: 13 }}>
-                    <Link to="/login">Log in</Link> or <Link to="/signup">Sign up</Link> to request a carpool
-                  </span>
-                )}
-              </div>
 
-              {odError && <div style={{ color: '#b00020' }}>{odError}</div>}
-              {odStatus && <div style={{ color: '#0a7d28' }}>{odStatus}</div>}
-            </div>
-          } />
-          <Route path="/on-demand/manage" element={
-            <div style={{ display: 'grid', gap: '0.75rem' }}>
-              <h2>Manage On-Demand Requests</h2>
-              {/* Manage toolbar */}
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-                <input
-                  placeholder="Search destination or origin address..."
-                  value={odSearch}
-                  onChange={e => { setOdSearch(e.target.value); setOdPage(1) }}
-                  style={{ flex: '1 1 260px', minWidth: 200, padding: '0.5rem', borderRadius: 6, border: '1px solid #ccc' }}
-                />
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <span>Page size</span>
-                  <select value={odPageSize} onChange={e => { setOdPageSize(parseInt(e.target.value)); setOdPage(1) }} style={{ padding: '0.35rem 0.5rem', borderRadius: 6, border: '1px solid #ccc', background: 'white' }}>
-                    <option value={5}>5</option>
-                    <option value={10}>10</option>
-                    <option value={20}>20</option>
-                  </select>
+                <label style={{ display: 'grid', gap: '0.25rem' }}>
+                  <span>Destination</span>
+                  <input
+                    ref={destInputRef}
+                    value={odDest}
+                    onChange={e => onDestInputChange(e.target.value)}
+                    placeholder="Start typing a destination..."
+                    autoComplete="off"
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: 6, border: '1px solid #ccc' }}
+                  />
                 </label>
-              </div>
-
-              {/* List with pagination */}
-              {(() => {
-                const q = odSearch.trim().toLowerCase()
-                const filtered = odRequests.filter(r => {
-                  const addr = originAddrCache[`${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`] || ''
-                  return !q || r.destination.toLowerCase().includes(q) || addr.toLowerCase().includes(q)
-                })
-                const total = filtered.length
-                const totalPages = Math.max(1, Math.ceil(total / odPageSize))
-                const page = Math.min(odPage, totalPages)
-                const start = (page - 1) * odPageSize
-                const pageItems = filtered.slice(start, start + odPageSize)
-                return (
-                  <div>
-                    {pageItems.length === 0 ? (
-                      <div>No requests found.</div>
-                    ) : (
-                      <ul style={{ paddingLeft: '1rem' }}>
-                        {pageItems.map((r) => {
-                          const key = `${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`
-                          const addr = originAddrCache[key]
-                          return (
-                            <li key={r.id}>
-                              <strong>{new Date(r.created_at).toLocaleString()}</strong>
-                              {' — To '}{r.destination}
-                              {' — Origin: '}
-                              {addr ? (
-                                <span>{addr}</span>
-                              ) : (
-                                <a href={`https://www.google.com/maps?q=${r.origin_lat},${r.origin_lng}`} target="_blank" rel="noreferrer">{r.origin_lat.toFixed(5)},{r.origin_lng.toFixed(5)}</a>
-                              )}
-                              {' — Dest: '}<a href={`https://www.google.com/maps?q=${r.dest_lat},${r.dest_lng}`} target="_blank" rel="noreferrer">{r.dest_lat.toFixed(5)},{r.dest_lng.toFixed(5)}</a>
-                            </li>
-                          )
-                        })}
-                      </ul>
-                    )}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
-                      <button type="button" disabled={page <= 1} onClick={() => setOdPage(p => Math.max(1, p - 1))} style={{ padding: '0.35rem 0.6rem', borderRadius: 6 }}>Prev</button>
-                      <span>Page {page} / {totalPages} ({total} total)</span>
-                      <button type="button" disabled={page >= totalPages} onClick={() => setOdPage(p => Math.min(totalPages, p + 1))} style={{ padding: '0.35rem 0.6rem', borderRadius: 6 }}>Next</button>
-                    </div>
+                {odDestCoord && (
+                  <div style={{ marginTop: 6 }}>
+                    <a href={`https://www.google.com/maps?q=${odDestCoord.lat},${odDestCoord.lng}`} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+                      View Destination on Maps ↗
+                    </a>
                   </div>
-                )
-              })()}
-            </div>
-          } />
-          <Route path="/account" element={<MyAccount />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/signup" element={<Signup />} />
+                )}
+                <div>
+                  <button
+                    type="button"
+                    onClick={submitOnDemandRequestOd}
+                    disabled={!authed || !odOrigin || !odDestCoord}
+                    style={{ padding: '0.6rem 1rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: (!authed || !odOrigin || !odDestCoord) ? 'not-allowed' : 'pointer' }}
+                  >
+                    {authed ? 'Request Carpool' : 'Log in to Request'}
+                  </button>
+                  {!authed && (
+                    <span style={{ marginLeft: 8, fontSize: 13 }}>
+                      <Link to="/login">Log in</Link> or <Link to="/signup">Sign up</Link> to request a carpool
+                    </span>
+                  )}
+                </div>
 
-          <Route path="*" element={<Navigate to="/details" replace />} />
+                {odError && <div style={{ color: '#b00020' }}>{odError}</div>}
+                {odStatus && <div style={{ color: '#0a7d28' }}>{odStatus}</div>}
+              </div>
+            } />
+          )}
+          {authed && (
+            <Route path="/on-demand/manage" element={
+              <div style={{ display: 'grid', gap: '0.75rem' }}>
+                <h2>Manage On-Demand Requests</h2>
+                {/* Manage toolbar */}
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                  <input
+                    placeholder="Search destination or origin address..."
+                    value={odSearch}
+                    onChange={e => { setOdSearch(e.target.value); setOdPage(1) }}
+                    style={{ flex: '1 1 260px', minWidth: 200, padding: '0.5rem', borderRadius: 6, border: '1px solid #ccc' }}
+                  />
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span>Page size</span>
+                    <select value={odPageSize} onChange={e => { setOdPageSize(parseInt(e.target.value)); setOdPage(1) }} style={{ padding: '0.35rem 0.5rem', borderRadius: 6, border: '1px solid #ccc', background: 'white' }}>
+                      <option value={5}>5</option>
+                      <option value={10}>10</option>
+                      <option value={20}>20</option>
+                    </select>
+                  </label>
+                </div>
+
+                {/* List with pagination */}
+                {(() => {
+                  const q = odSearch.trim().toLowerCase()
+                  const filtered = odRequests.filter(r => {
+                    const addr = originAddrCache[`${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`] || ''
+                    return !q || r.destination.toLowerCase().includes(q) || addr.toLowerCase().includes(q)
+                  })
+                  const total = filtered.length
+                  const totalPages = Math.max(1, Math.ceil(total / odPageSize))
+                  const page = Math.min(odPage, totalPages)
+                  const start = (page - 1) * odPageSize
+                  const pageItems = filtered.slice(start, start + odPageSize)
+                  return (
+                    <div>
+                      {pageItems.length === 0 ? (
+                        <div>No requests found.</div>
+                      ) : (
+                        <ul style={{ paddingLeft: '1rem' }}>
+                          {pageItems.map((r) => {
+                            const key = `${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`
+                            const addr = originAddrCache[key]
+                            return (
+                              <li key={r.id}>
+                                <strong>{new Date(r.created_at).toLocaleString()}</strong>
+                                {' — To '}{r.destination}
+                                {' — Origin: '}
+                                {addr ? (
+                                  <span>{addr}</span>
+                                ) : (
+                                  <a href={`https://www.google.com/maps?q=${r.origin_lat},${r.origin_lng}`} target="_blank" rel="noreferrer">{r.origin_lat.toFixed(5)},{r.origin_lng.toFixed(5)}</a>
+                                )}
+                                {' — Dest: '}<a href={`https://www.google.com/maps?q=${r.dest_lat},${r.dest_lng}`} target="_blank" rel="noreferrer">{r.dest_lat.toFixed(5)},{r.dest_lng.toFixed(5)}</a>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+                        <button type="button" disabled={page <= 1} onClick={() => setOdPage(p => Math.max(1, p - 1))} style={{ padding: '0.35rem 0.6rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: page <= 1 ? 'not-allowed' : 'pointer' }}>Prev</button>
+                        <span>Page {page} / {totalPages} ({total} total)</span>
+                        <button type="button" disabled={page >= totalPages} onClick={() => setOdPage(p => Math.min(totalPages, p + 1))} style={{ padding: '0.35rem 0.6rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: page >= totalPages ? 'not-allowed' : 'pointer' }}>Next</button>
+                      </div>
+                    </div>
+                  )
+                })()}
+              </div>
+            } />
+          )}
+          <Route path="/account" element={<MyAccount />} />
+          {!authed && <Route path="/login" element={<Login />} />}
+          {!authed && <Route path="/signup" element={<Signup />} />}
+
+          <Route path="*" element={<Navigate to={authed ? (mode === 'regular' ? '/details' : '/on-demand') : '/login'} replace />} />
         </Routes>
 
         <footer style={{ marginTop: '2rem', fontSize: 12, color: '#666' }}>

@@ -52,7 +52,7 @@ export default function Login() {
         <span>Password</span>
         <input type="password" value={password} onChange={e => setPassword(e.target.value)} required style={{ padding: '0.5rem', borderRadius: 6, border: '1px solid #ccc' }} />
       </label>
-      <button type="submit" disabled={loading} style={{ padding: '0.6rem 1rem', borderRadius: 6 }}>{loading ? 'Logging in...' : 'Log in'}</button>
+      <button type="submit" disabled={loading} style={{ padding: '0.6rem 1rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: loading ? 'not-allowed' : 'pointer' }}>{loading ? 'Logging in...' : 'Log in'}</button>
       {error && <div style={{ color: '#b00020' }}>{error}</div>}
       {success && <div style={{ color: '#0a7d28' }}>{success}</div>}
     </form>
