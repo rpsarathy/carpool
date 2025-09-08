@@ -20,6 +20,7 @@ app.add_middleware(
         "http://localhost:5173", 
         "http://127.0.0.1:5173",
         "https://carpool-web-dzxkfcfuiq-uc.a.run.app",
+        "https://carpool-web-37218666122.us-central1.run.app",
         "*"
     ],
     allow_credentials=True,
