@@ -16,6 +16,12 @@ steps:
       - --platform=managed
       - --allow-unauthenticated
       - --port=8000
+      - --add-cloudsql-instances=${_CLOUDSQL_INSTANCE}
+      - --set-env-vars=DATABASE_URL=postgresql://${_DB_USER}:${_DB_PASSWORD}@/${_DB_NAME}?host=/cloudsql/${_CLOUDSQL_INSTANCE}
+      - --memory=512Mi
+      - --cpu=1
+      - --concurrency=100
+      - --timeout=300
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'Allow unauthenticated invoke'
     entrypoint: 'bash'
@@ -28,3 +34,12 @@ steps:
           --role=roles/run.invoker || true
 images:
   - '${_IMAGE}'
+
+substitutions:
+  _SERVICE: 'carpool-api'
+  _REGION: 'us-central1'
+  _IMAGE: 'gcr.io/carpool-app-470818/carpool-api'
+  _CLOUDSQL_INSTANCE: 'carpool-app-470818:us-central1:carpool'
+  _DB_USER: 'carpool'
+  _DB_PASSWORD: 'Carpool@80'
+  _DB_NAME: 'carpool_db'

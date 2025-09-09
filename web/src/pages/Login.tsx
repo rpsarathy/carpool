@@ -32,8 +32,18 @@ export default function Login() {
       setSuccess('Logged in!')
       // Frontend-only gate: mark user as authenticated
       localStorage.setItem('auth_user', email.trim())
-      // Navigate home so actions become enabled
-      navigate('/')
+      
+      // Trigger storage event for same-tab updates
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: 'auth_user',
+        newValue: email.trim(),
+        storageArea: localStorage
+      }))
+      
+      // Small delay to ensure state updates before navigation
+      setTimeout(() => {
+        navigate('/')
+      }, 100)
     } catch (e: any) {
       setError(e.message)
     } finally {

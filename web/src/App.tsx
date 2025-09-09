@@ -5,6 +5,7 @@ import { API_BASE, GOOGLE_API_KEY } from './config'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import MyAccount from './pages/MyAccount'
+import Admin from './pages/Admin'
 
 // Minimal ambient to prevent TS errors when Google JS hasn't loaded at type-check time
 declare const google: any
@@ -55,6 +56,10 @@ export default function App() {
   const [odDestCoord, setOdDestCoord] = useState<{ lat: number; lng: number } | null>(null)
   const [odStatus, setOdStatus] = useState<string | null>(null)
   const [odError, setOdError] = useState<string | null>(null)
+  const [odDate, setOdDate] = useState<string>('')
+  const [odDriver, setOdDriver] = useState<string>('')
+  const [odDriverEnabled, setOdDriverEnabled] = useState<boolean>(false)
+  const [availableDrivers, setAvailableDrivers] = useState<string[]>([])
   const [odRequests, setOdRequests] = useState<Array<{ id: number; origin_lat: number; origin_lng: number; destination: string; dest_lat: number; dest_lng: number; created_at: string }>>([])
   const [odSearch, setOdSearch] = useState('')
   const [odPage, setOdPage] = useState(1)
@@ -71,12 +76,27 @@ export default function App() {
   // Simple frontend auth gate
   const [authed, setAuthed] = useState<boolean>(() => !!localStorage.getItem('auth_user'))
   const [meName, setMeName] = useState<string | null>(null)
+  
+  // Function to update auth state manually
+  const updateAuthState = () => {
+    setAuthed(!!localStorage.getItem('auth_user'))
+  }
+  
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key === 'auth_user') setAuthed(!!localStorage.getItem('auth_user'))
+      if (e.key === 'auth_user') {
+        setAuthed(!!localStorage.getItem('auth_user'))
+      }
     }
+    
+    // Listen for both storage events and custom auth events
     window.addEventListener('storage', onStorage)
-    return () => window.removeEventListener('storage', onStorage)
+    window.addEventListener('auth-updated', updateAuthState)
+    
+    return () => {
+      window.removeEventListener('storage', onStorage)
+      window.removeEventListener('auth-updated', updateAuthState)
+    }
   }, [])
 
   // Fetch current user profile to show name in header
@@ -427,8 +447,18 @@ export default function App() {
       setOdStatus(null)
       return
     }
+    if (!odDate) {
+      setOdError('Please select a date')
+      setOdStatus(null)
+      return
+    }
+    if (odDriverEnabled && !odDriver) {
+      setOdError('Please select a driver')
+      setOdStatus(null)
+      return
+    }
     try {
-      const res = await fetch(`${API_BASE}/on_demand/requests`, {
+      const res = await fetch(`${API_BASE}/on-demand/requests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -439,13 +469,22 @@ export default function App() {
           dest_lng: odDestCoord.lng,
           dest_place_id: odDestPlaceId,
           dest_address: odDestAddress || odDest.trim(),
+          date: odDate,
+          driver: odDriverEnabled ? odDriver : null,
         })
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.detail || `Failed to submit request: ${res.status}`)
       }
-      setOdStatus('Request submitted')
+      setOdStatus('Request submitted successfully!')
+      // Clear form
+      setOdDest('')
+      setOdDestCoord(null)
+      setOdDate('')
+      setOdDriver('')
+      setOdDriverEnabled(false)
+      setOdOrigin(null)
       // refresh list
       const list = await fetch(`${API_BASE}/on_demand/requests`).then(r => r.json()).catch(() => [])
       setOdRequests(Array.isArray(list) ? list : [])
@@ -537,6 +576,9 @@ export default function App() {
           <>
             <Link to="/account" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/account') }}>
               My Account
+            </Link>
+            <Link to="/admin" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111', ...isActive('/admin') }}>
+              Admin
             </Link>
             <button 
               onClick={handleLogout} 
@@ -749,6 +791,9 @@ export default function App() {
               </div>
             } />
           )}
+          {mode === 'regular' && authed && (
+            <Route path="/admin" element={<Admin />} />
+          )}
           {authed && (
             <Route path="/on-demand" element={
               <div style={{ display: 'grid', gap: '0.75rem' }}>
@@ -780,12 +825,43 @@ export default function App() {
                     </a>
                   </div>
                 )}
+                <label style={{ display: 'grid', gap: '0.25rem', maxWidth: 220 }}>
+                  <span>Date</span>
+                  <input type="date" value={odDate} onChange={e => setOdDate(e.target.value)}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: 6, border: '1px solid #ccc' }} />
+                </label>
+                <label style={{ display: 'grid', gap: '0.25rem', maxWidth: 220 }}>
+                  <span>Preferred Driver (Optional)</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={odDriverEnabled} 
+                      onChange={e => setOdDriverEnabled(e.target.checked)}
+                      id="driver-checkbox"
+                    />
+                    <label htmlFor="driver-checkbox" style={{ fontSize: '0.9rem' }}>
+                      Request specific driver
+                    </label>
+                  </div>
+                  {odDriverEnabled && (
+                    <select
+                      value={odDriver}
+                      onChange={e => setOdDriver(e.target.value)}
+                      style={{ width: '100%', padding: '0.5rem', borderRadius: 6, border: '1px solid #ccc', background: 'white' }}
+                    >
+                      <option value="">Select a driver</option>
+                      {availableDrivers.map(d => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                  )}
+                </label>
                 <div>
                   <button
                     type="button"
                     onClick={submitOnDemandRequestOd}
-                    disabled={!authed || !odOrigin || !odDestCoord}
-                    style={{ padding: '0.6rem 1rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: (!authed || !odOrigin || !odDestCoord) ? 'not-allowed' : 'pointer' }}
+                    disabled={!authed || !odOrigin || !odDestCoord || !odDate || (odDriverEnabled && !odDriver)}
+                    style={{ padding: '0.6rem 1rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: (!authed || !odOrigin || !odDestCoord || !odDate || (odDriverEnabled && !odDriver)) ? 'not-allowed' : 'pointer' }}
                   >
                     {authed ? 'Request Carpool' : 'Log in to Request'}
                   </button>
