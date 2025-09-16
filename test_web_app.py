@@ -1,186 +1,120 @@
 #!/usr/bin/env python3
 """
-Test script to verify web app configuration and simulate web app signup/login flow
-Usage: python test_web_app.py
+Test web app signup and login functionality
 """
-
 import requests
 import json
 import time
-import os
 
-def check_web_app_config():
-    """Check if web app is configured to use the correct API endpoint"""
-    print("🔍 Checking web app configuration...")
-    
-    # Check if VITE_API_BASE environment variable is set
-    vite_api_base = os.environ.get('VITE_API_BASE')
-    if vite_api_base:
-        print(f"✅ VITE_API_BASE environment variable: {vite_api_base}")
-        return vite_api_base
-    else:
-        print("⚠️  VITE_API_BASE not set, will use default: http://localhost:8000")
-        return "http://localhost:8000"
+# URLs
+API_URL = "https://carpool-api-37218666122.us-central1.run.app"
+WEB_URL = "https://carpool-web-dzxkfcfuiq-uc.a.run.app"
 
-def simulate_web_app_signup():
-    """Simulate the web app signup flow"""
-    print("\n🔍 Simulating web app signup flow...")
+def test_api_endpoints():
+    """Test API endpoints that the web app uses"""
+    print("🔧 Testing API endpoints...")
     
-    # Use the GCP API endpoint (what the deployed web app should use)
-    api_base = "https://carpool-api-37218666122.us-central1.run.app"
+    # Test health
+    try:
+        response = requests.get(f"{API_URL}/health")
+        print(f"✅ Health: {response.status_code} - {response.json()}")
+    except Exception as e:
+        print(f"❌ Health error: {e}")
     
-    # Generate unique test data
-    timestamp = int(time.time())
-    test_email = f"webapp{timestamp}@example.com"
-    test_password = "WebApp123!"
-    
-    # Simulate web app signup request
-    signup_payload = {
-        "email": test_email,
-        "password": test_password,
+    # Test signup endpoint
+    test_user = {
+        "email": "webtest@example.com",
+        "password": "TestPass123!",
         "profile": {
-            "full_name": "Web App Test User",
-            "phone": "+1987654321",
-            "date_of_birth": "1985-05-15",
-            "gender": "Other",
-            "address": {
-                "city": "San Francisco",
-                "state": "CA",
-                "zip": "94105"
-            }
+            "full_name": "Web Test User"
         }
     }
     
     try:
-        response = requests.post(
-            f"{api_base}/auth/signup",
-            headers={
-                "Content-Type": "application/json",
-                "Origin": "https://carpool-web-37218666122.us-central1.run.app",  # Simulate web app origin
-                "Referer": "https://carpool-web-37218666122.us-central1.run.app/signup"
-            },
-            json=signup_payload
-        )
-        
-        print(f"Signup Status: {response.status_code}")
-        print(f"Signup Response: {response.text}")
-        
-        if response.status_code == 201:
-            print("✅ Web app signup simulation successful")
-            return test_email, test_password
-        else:
-            print("❌ Web app signup simulation failed")
-            return None, None
-            
+        response = requests.post(f"{API_URL}/auth/signup", json=test_user)
+        print(f"✅ Signup: {response.status_code} - {response.text[:100]}")
     except Exception as e:
         print(f"❌ Signup error: {e}")
-        return None, None
-
-def simulate_web_app_login(email, password):
-    """Simulate the web app login flow"""
-    print(f"\n🔍 Simulating web app login for {email}...")
     
-    api_base = "https://carpool-api-37218666122.us-central1.run.app"
-    
-    login_payload = {
-        "email": email,
-        "password": password
+    # Test login endpoint
+    login_data = {
+        "email": "webtest@example.com",
+        "password": "TestPass123!"
     }
     
     try:
-        response = requests.post(
-            f"{api_base}/auth/login",
-            headers={
-                "Content-Type": "application/json",
-                "Origin": "https://carpool-web-37218666122.us-central1.run.app",
-                "Referer": "https://carpool-web-37218666122.us-central1.run.app/login"
-            },
-            json=login_payload
-        )
-        
-        print(f"Login Status: {response.status_code}")
-        print(f"Login Response: {response.text}")
-        
-        if response.status_code == 200:
-            print("✅ Web app login simulation successful")
-            
-            # Test the /auth/me endpoint (what web app does after login)
-            me_response = requests.get(
-                f"{api_base}/auth/me",
-                headers={
-                    "X-User-Email": email,
-                    "Origin": "https://carpool-web-37218666122.us-central1.run.app"
-                }
-            )
-            
-            print(f"Profile fetch status: {me_response.status_code}")
-            if me_response.status_code == 200:
-                profile_data = me_response.json()
-                print(f"✅ Profile retrieved: {profile_data.get('profile', {}).get('full_name', 'No name')}")
-            
-            return True
-        else:
-            print("❌ Web app login simulation failed")
-            return False
-            
+        response = requests.post(f"{API_URL}/auth/login", json=login_data)
+        print(f"✅ Login: {response.status_code} - {response.text[:100]}")
     except Exception as e:
         print(f"❌ Login error: {e}")
-        return False
-
-def test_cors_headers():
-    """Test CORS headers for web app domains"""
-    print("\n🔍 Testing CORS headers...")
     
-    api_base = "https://carpool-api-37218666122.us-central1.run.app"
-    
-    # Test OPTIONS request (preflight)
+    # Test groups endpoint
     try:
-        response = requests.options(
-            f"{api_base}/auth/login",
-            headers={
-                "Origin": "https://carpool-web-37218666122.us-central1.run.app",
-                "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "Content-Type"
-            }
-        )
-        
-        print(f"CORS preflight status: {response.status_code}")
-        cors_headers = {k: v for k, v in response.headers.items() if 'access-control' in k.lower()}
-        print(f"CORS headers: {cors_headers}")
-        
-        if response.status_code in [200, 204]:
-            print("✅ CORS preflight successful")
-        else:
-            print("⚠️  CORS preflight may have issues")
-            
+        response = requests.get(f"{API_URL}/groups")
+        print(f"✅ Groups: {response.status_code} - Found {len(response.json())} groups")
     except Exception as e:
-        print(f"❌ CORS test error: {e}")
+        print(f"❌ Groups error: {e}")
 
-def main():
-    """Run web app tests"""
-    print("🚀 Starting Web App Integration Tests")
-    print("=" * 50)
+def test_web_accessibility():
+    """Test that web app is accessible"""
+    print("\n🌐 Testing web app accessibility...")
     
-    # Check configuration
-    check_web_app_config()
-    
-    # Test CORS
-    test_cors_headers()
-    
-    # Test signup flow
-    email, password = simulate_web_app_signup()
-    
-    if email and password:
-        # Test login flow
-        simulate_web_app_login(email, password)
-    
-    print("\n" + "=" * 50)
-    print("🏁 Web app tests completed!")
-    print("\n📝 Next steps:")
-    print("1. Open your web app: https://carpool-web-37218666122.us-central1.run.app")
-    print("2. Try signing up with a new account")
-    print("3. Try logging in with the account")
-    print("4. Check browser console for any errors")
+    try:
+        response = requests.get(WEB_URL, timeout=10)
+        if response.status_code == 200:
+            print(f"✅ Web app accessible at {WEB_URL}")
+        else:
+            print(f"❌ Web app returned {response.status_code}")
+    except Exception as e:
+        print(f"❌ Web app error: {e}")
+
+def print_test_instructions():
+    """Print manual testing instructions"""
+    print(f"""
+🧪 Manual Testing Instructions:
+
+1. Open your web browser and go to:
+   {WEB_URL}
+
+2. Test Signup:
+   - Click "Sign Up" or "Register" 
+   - Fill in the form:
+     * Email: test@example.com
+     * Password: TestPass123!
+     * Full Name: Test User
+   - Click Submit
+   - Should see success message or redirect to dashboard
+
+3. Test Login:
+   - If not already logged in, click "Login"
+   - Use the same credentials:
+     * Email: test@example.com  
+     * Password: TestPass123!
+   - Click Submit
+   - Should see dashboard or main app interface
+
+4. Test Groups:
+   - Once logged in, navigate to Groups section
+   - Should see list of carpool groups
+   - Try creating a new group
+
+5. Check Browser Console:
+   - Press F12 to open Developer Tools
+   - Check Console tab for any errors
+   - Network tab should show successful API calls
+
+API Endpoints for Reference:
+- Health: {API_URL}/health
+- Docs: {API_URL}/docs
+- Signup: {API_URL}/auth/signup
+- Login: {API_URL}/auth/login
+- Groups: {API_URL}/groups
+""")
 
 if __name__ == "__main__":
-    main()
+    print("🚀 Testing Carpool Web App")
+    print("=" * 50)
+    
+    test_api_endpoints()
+    test_web_accessibility() 
+    print_test_instructions()

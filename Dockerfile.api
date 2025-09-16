@@ -9,22 +9,27 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system deps (if any)
+# Install system dependencies for PostgreSQL
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    libpq-dev \
+    gcc \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy only what we need
+# Copy requirements and install dependencies
 COPY pyproject.toml /app/
 COPY src /app/src
 COPY data /app/data
+COPY alembic /app/alembic
+COPY alembic.ini /app/
 
-# Install runtime deps directly (simplify; avoids needing build backend)
-# NOTE: match your app deps
+# Install all required dependencies including PostgreSQL and Google OAuth support
 RUN pip install --upgrade pip \
-    && pip install fastapi uvicorn[standard] tinydb pydantic
+    && pip install fastapi uvicorn[standard] tinydb pydantic \
+    sqlalchemy psycopg2-binary alembic python-dotenv requests \
+    google-auth google-auth-oauthlib python-jose[cryptography] PyJWT cryptography
 
 EXPOSE 8000
 
-# Cloud Run will set $PORT; default to 8000 for local
-CMD exec uvicorn carpool.api:app --host 0.0.0.0 --port ${PORT}
+# Use direct uvicorn startup
+CMD exec uvicorn src.carpool.api:app --host 0.0.0.0 --port ${PORT} --timeout-keep-alive 300

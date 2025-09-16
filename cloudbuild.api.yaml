@@ -17,11 +17,12 @@ steps:
       - --allow-unauthenticated
       - --port=8000
       - --add-cloudsql-instances=${_CLOUDSQL_INSTANCE}
-      - --set-env-vars=DATABASE_URL=postgresql://${_DB_USER}:${_DB_PASSWORD}@/${_DB_NAME}?host=/cloudsql/${_CLOUDSQL_INSTANCE}
-      - --memory=512Mi
+      - --set-env-vars=DATABASE_URL=postgresql://${_DB_USER}:${_DB_PASSWORD}@/${_DB_NAME}?host=/cloudsql/${_CLOUDSQL_INSTANCE},GOOGLE_CLIENT_ID=${_GOOGLE_CLIENT_ID},GOOGLE_CLIENT_SECRET=${_GOOGLE_CLIENT_SECRET},GOOGLE_OAUTH2_AUTHORIZATION_BASE_URL=${_GOOGLE_OAUTH2_AUTHORIZATION_BASE_URL},GOOGLE_OAUTH2_TOKEN_URL=${_GOOGLE_OAUTH2_TOKEN_URL}
+      - --memory=1Gi
       - --cpu=1
       - --concurrency=100
-      - --timeout=300
+      - --timeout=600
+      - --max-instances=10
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'Allow unauthenticated invoke'
     entrypoint: 'bash'
@@ -41,5 +42,9 @@ substitutions:
   _IMAGE: 'gcr.io/carpool-app-470818/carpool-api'
   _CLOUDSQL_INSTANCE: 'carpool-app-470818:us-central1:carpool'
   _DB_USER: 'carpool'
-  _DB_PASSWORD: 'Carpool@80'
+  _DB_PASSWORD: 'Carpool80'
   _DB_NAME: 'carpool_db'
+  _GOOGLE_CLIENT_ID: '37218666122-q4qjsa38e8eojhnl1q8k0s6sp4ml6dlf.apps.googleusercontent.com'
+  _GOOGLE_CLIENT_SECRET: 'your_client_secret'
+  _GOOGLE_OAUTH2_AUTHORIZATION_BASE_URL: 'https://accounts.google.com/o/oauth2/auth'
+  _GOOGLE_OAUTH2_TOKEN_URL: 'https://oauth2.googleapis.com/token'

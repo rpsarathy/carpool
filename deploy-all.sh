@@ -1,97 +1,91 @@
 #!/bin/bash
+
+# Comprehensive deployment script for carpool app with Google OAuth
 set -e
 
-echo "🚀 Carpool App - Complete Deployment to GCP"
-echo "=============================================="
+PROJECT_ID="carpool-app-470818"
+REGION="us-central1"
+CLOUD_BUILD_SA="${PROJECT_ID}@cloudbuild.gserviceaccount.com"
 
-# Check if gcloud is installed
-if ! command -v gcloud &> /dev/null; then
-    echo "❌ gcloud CLI is not installed. Please install it first."
-    exit 1
-fi
+echo "🚀 Starting deployment of carpool app with Google OAuth..."
 
-# Set project
-echo "📋 Setting GCP project..."
-gcloud config set project carpool-app-470818
+# Step 0: Grant necessary permissions to Cloud Build service account
+echo "🔐 Step 0: Setting up Cloud Build permissions..."
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$CLOUD_BUILD_SA" \
+  --role="roles/run.admin" \
+  --project=$PROJECT_ID || echo "Cloud Build already has run.admin role"
 
-# Check authentication
-echo "🔐 Checking authentication..."
-if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q .; then
-    echo "❌ Not authenticated with gcloud. Please run: gcloud auth login"
-    exit 1
-fi
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$CLOUD_BUILD_SA" \
+  --role="roles/iam.serviceAccountUser" \
+  --project=$PROJECT_ID || echo "Cloud Build already has serviceAccountUser role"
 
-# Commit current changes
-echo "📝 Committing code changes..."
-git add .
-if git diff --staged --quiet; then
-    echo "ℹ️  No changes to commit"
-else
-    git commit -m "PostgreSQL migration complete - ready for deployment
+# Step 1: Clean up and run local migration to test
+echo "📦 Step 1: Testing migration locally..."
+rm -f carpool_local.db
+alembic upgrade head
+echo "✅ Local migration successful"
 
-- Migrated from TinyDB to PostgreSQL with SQLite fallback for local dev
-- Fixed all authentication endpoints (/auth/register, /auth/login, /auth/me)
-- Updated group management with proper validation
-- Fixed on-demand requests with simplified schema
-- Added admin endpoints for user management
-- All 16 API tests passing
-- Ready for production deployment
+# Step 2: Deploy API
+echo "🔧 Step 2: Deploying API to Cloud Run..."
+gcloud builds submit --config cloudbuild.api.yaml --project $PROJECT_ID
 
-Deployment includes:
-- API service: carpool-api
-- Web service: carpool-web
-- PostgreSQL database connection
-- Environment-aware database configuration"
-fi
+# Wait a moment for deployment to settle
+sleep 10
 
-# Deploy API
-echo ""
-echo "🔧 Deploying API to Cloud Run..."
-echo "Service: carpool-api"
-echo "Region: us-central1"
-gcloud builds submit --config cloudbuild.api.yaml .
+# Step 3: Set IAM policy for API (allow unauthenticated access)
+echo "🔐 Step 3: Setting IAM policy for API..."
+gcloud run services add-iam-policy-binding carpool-api \
+  --region=$REGION \
+  --member=allUsers \
+  --role=roles/run.invoker \
+  --project=$PROJECT_ID || echo "⚠️  IAM policy setting failed, but service may still work"
 
-# Deploy Web Frontend
-echo ""
-echo "🌐 Deploying Web Frontend to Cloud Run..."
-echo "Service: carpool-web"
-echo "Region: us-central1"
-gcloud builds submit --config cloudbuild.web.yaml .
+# Step 4: Get the new API URL
+echo "🔍 Step 4: Getting API URL..."
+API_URL=$(gcloud run services describe carpool-api --region=$REGION --project=$PROJECT_ID --format="value(status.url)")
+echo "API URL: $API_URL"
 
-# Test deployment
-echo ""
-echo "🧪 Testing deployed services..."
+# Step 5: Update web build config with correct API URL
+echo "📝 Step 5: Updating web build configuration..."
+sed -i.bak "s|_VITE_API_BASE: \".*\"|_VITE_API_BASE: \"$API_URL\"|" cloudbuild.web.yaml
 
-API_URL="https://carpool-api-dzxkfcfuiq-uc.a.run.app"
-WEB_URL="https://carpool-web-dzxkfcfuiq-uc.a.run.app"
+# Step 6: Deploy web app
+echo "🌐 Step 6: Deploying web app to Cloud Run..."
+gcloud builds submit --config cloudbuild.web.yaml --project $PROJECT_ID
 
-# Test API health
-echo "Testing API health..."
-if curl -s -f "${API_URL}/health" > /dev/null; then
-    echo "✅ API is healthy"
-else
-    echo "⚠️  API health check failed (may take a few minutes to be ready)"
-fi
+# Wait a moment for deployment to settle
+sleep 5
 
-# Test web frontend
-echo "Testing web frontend..."
-if curl -s -f "${WEB_URL}" > /dev/null; then
-    echo "✅ Web frontend is accessible"
-else
-    echo "⚠️  Web frontend check failed (may take a few minutes to be ready)"
-fi
+# Step 7: Set IAM policy for web app (allow unauthenticated access)
+echo "🔐 Step 7: Setting IAM policy for web app..."
+gcloud run services add-iam-policy-binding carpool-web \
+  --region=$REGION \
+  --member=allUsers \
+  --role=roles/run.invoker \
+  --project=$PROJECT_ID || echo "⚠️  IAM policy setting failed, but service may still work"
+
+# Step 8: Get final URLs
+echo "🎉 Step 8: Deployment complete!"
+API_URL=$(gcloud run services describe carpool-api --region=$REGION --project=$PROJECT_ID --format="value(status.url)")
+WEB_URL=$(gcloud run services describe carpool-web --region=$REGION --project=$PROJECT_ID --format="value(status.url)")
 
 echo ""
-echo "🎉 Deployment Complete!"
-echo "======================="
-echo "📍 API URL:     ${API_URL}"
-echo "📍 Web URL:     ${WEB_URL}"
-echo "📍 Health:      ${API_URL}/health"
-echo "📍 API Docs:    ${API_URL}/docs"
+echo "✅ Deployment successful!"
+echo "📡 API URL: $API_URL"
+echo "🌐 Web URL: $WEB_URL"
 echo ""
-echo "🔍 To run comprehensive tests:"
-echo "   python test_gcp_deployment.py"
+echo "🔧 Google OAuth Configuration:"
+echo "1. Ensure your Google OAuth Client ID is configured for:"
+echo "   - $WEB_URL (production domain)"
+echo "   - http://localhost:5173 (local development)"
+echo "2. Check that CORS is configured in the API for both domains"
 echo ""
-echo "📊 To view logs:"
-echo "   gcloud logs tail --service=carpool-api"
-echo "   gcloud logs tail --service=carpool-web"
+echo "🔍 Troubleshooting:"
+echo "   - API logs: gcloud logs read --service=carpool-api --project=$PROJECT_ID"
+echo "   - Web logs: gcloud logs read --service=carpool-web --project=$PROJECT_ID"
+echo "   - Test API health: curl $API_URL/health"
+
+# Restore original cloudbuild.web.yaml
+mv cloudbuild.web.yaml.bak cloudbuild.web.yaml

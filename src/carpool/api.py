@@ -10,23 +10,36 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 import re
 import hashlib
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
+import jwt
 
-from .database import get_db, User, Group, OnDemandRequest, health_check
+from .database import get_db, User, Group, OnDemandRequest, health_check, Base, engine, SessionLocal
+
+# Database initialization - non-blocking for Cloud Run
+def init_database():
+    """Initialize database tables if possible, but don't block startup"""
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database tables created/verified")
+        return True
+    except Exception as e:
+        print(f"⚠️ Database table creation skipped: {e}")
+        return False
+
+# Try to initialize database but don't block startup
+init_database()
+
+# Dependency to get database session
 
 # Initialize FastAPI app
 app = FastAPI(title="Carpool API", version="0.1.0")
 
-# Configure CORS for local dev and production
+# Configure CORS BEFORE any routes
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173", 
-        "http://127.0.0.1:5173",
-        "https://carpool-web-dzxkfcfuiq-uc.a.run.app",
-        "https://carpool-web-37218666122.us-central1.run.app",
-        "*"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,  # Set to False when using wildcard origins
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
@@ -97,6 +110,16 @@ class LoginIn(BaseModel):
             raise ValueError("invalid email format")
         return v
 
+class GoogleAuthIn(BaseModel):
+    id_token: str
+
+class GoogleUserInfo(BaseModel):
+    email: str
+    name: str
+    picture: Optional[str] = None
+    given_name: Optional[str] = None
+    family_name: Optional[str] = None
+
 class MeOut(BaseModel):
     email: str
     profile: Optional[Profile] = None
@@ -166,19 +189,42 @@ class GroupOut(GroupIn):
     id: int
 
 class OnDemandRequestIn(BaseModel):
-    user_email: str
-    origin: str
-    destination: str
-    date: str
+    user_email: Optional[str] = None
+    origin: Optional[str] = None
+    origin_lat: Optional[float] = None
+    origin_lng: Optional[float] = None
+    destination: Optional[str] = None
+    dest_lat: Optional[float] = None
+    dest_lng: Optional[float] = None
+    dest_place_id: Optional[str] = None
+    dest_address: Optional[str] = None
+    date: Optional[str] = None
     preferred_driver: Optional[str] = None
+    
+    # Allow extra fields from frontend
+    model_config = {"extra": "ignore"}
 
     @field_validator("origin", "destination")
     @classmethod
-    def location_valid(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("location cannot be empty")
+    def location_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return v
+        v = str(v).strip()
         return v
+    
+    @field_validator("user_email")
+    @classmethod
+    def email_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return v
+        return str(v).strip()
+    
+    @field_validator("date")
+    @classmethod
+    def date_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return v
+        return str(v).strip()
 
 class OnDemandRequestOut(OnDemandRequestIn):
     id: int
@@ -216,6 +262,11 @@ async def health_endpoint() -> dict:
 @app.get("/")
 async def root() -> dict:
     return {"message": "Carpool API is running", "version": "0.1.0"}
+
+@app.post("/auth/signup", status_code=201, response_model=MeOut)
+async def auth_signup(payload: SignupIn, db: Session = Depends(get_db)) -> MeOut:
+    """Legacy signup endpoint - redirects to register"""
+    return await auth_register(payload, db)
 
 @app.post("/auth/register", status_code=201, response_model=MeOut)
 async def auth_register(payload: SignupIn, db: Session = Depends(get_db)) -> MeOut:
@@ -259,6 +310,59 @@ async def auth_me(x_user_email: Optional[str] = Header(default=None, alias="X-Us
         raise HTTPException(status_code=404, detail="User not found")
     
     return MeOut(email=user.email, profile=None)
+
+def verify_google_token(token: str) -> GoogleUserInfo:
+    """Verify Google ID token and extract user information"""
+    try:
+        # Get Google client ID from environment
+        google_client_id = os.environ.get("GOOGLE_CLIENT_ID")
+        if not google_client_id:
+            raise HTTPException(status_code=500, detail="Google OAuth not configured")
+        
+        # Verify the token
+        idinfo = id_token.verify_oauth2_token(
+            token, google_requests.Request(), google_client_id
+        )
+        
+        # Extract user information
+        return GoogleUserInfo(
+            email=idinfo.get("email"),
+            name=idinfo.get("name", ""),
+            picture=idinfo.get("picture"),
+            given_name=idinfo.get("given_name"),
+            family_name=idinfo.get("family_name")
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid Google token: {str(e)}")
+
+@app.post("/auth/google", response_model=MeOut)
+async def auth_google(payload: GoogleAuthIn, db: Session = Depends(get_db)) -> MeOut:
+    """Authenticate user with Google OAuth"""
+    # Verify Google token and get user info
+    google_user = verify_google_token(payload.id_token)
+    
+    # Check if user exists
+    user = db.query(User).filter(User.email == google_user.email).first()
+    
+    if not user:
+        # Create new user from Google info
+        user = User(
+            email=google_user.email,
+            password_hash="",  # No password for Google OAuth users
+            google_id=google_user.email  # Use email as Google ID
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    
+    # Create profile from Google info
+    profile = Profile(
+        full_name=google_user.name,
+        first_name=google_user.given_name,
+        last_name=google_user.family_name
+    )
+    
+    return MeOut(email=user.email, profile=profile)
 
 @app.get("/groups", response_model=List[GroupOut])
 async def list_groups(db: Session = Depends(get_db)) -> List[GroupOut]:
@@ -352,23 +456,72 @@ async def delete_group(name: str, db: Session = Depends(get_db)):
     return None
 
 @app.post("/on-demand/requests")
+@app.post("/on_demand/requests")  # Alias for frontend compatibility
 async def create_on_demand_request(request: OnDemandRequestIn, db: Session = Depends(get_db)):
     """Create a new on-demand carpool request"""
     try:
+        # Log the incoming request for debugging
+        print(f"Received on-demand request: {request.dict()}")
+        
+        # Validate required fields with better error messages
+        missing_fields = []
+        if not request.user_email or request.user_email.strip() == "":
+            missing_fields.append("user_email (please log in)")
+        if not request.origin or request.origin.strip() == "":
+            missing_fields.append("origin (pickup location)")
+        if not request.destination or request.destination.strip() == "":
+            missing_fields.append("destination")
+        if not request.date or request.date.strip() == "":
+            missing_fields.append("date")
+        
+        if missing_fields:
+            raise HTTPException(
+                status_code=422, 
+                detail=f"Missing required fields: {', '.join(missing_fields)}. Please ensure you are logged in and have provided all required information."
+            )
+        
         new_request = OnDemandRequest(
-            user_email=request.user_email,
-            origin=request.origin,
-            destination=request.destination,
-            date=request.date,
-            preferred_driver=request.preferred_driver
+            user_email=request.user_email.strip(),
+            origin=request.origin.strip(),
+            origin_lat=request.origin_lat,
+            origin_lng=request.origin_lng,
+            destination=request.destination.strip(),
+            dest_lat=request.dest_lat,
+            dest_lng=request.dest_lng,
+            dest_place_id=request.dest_place_id,
+            dest_address=request.dest_address,
+            date=request.date.strip(),
+            preferred_driver=request.preferred_driver.strip() if request.preferred_driver else None
         )
         
         db.add(new_request)
         db.commit()
         db.refresh(new_request)
         
-        return {"message": "On-demand request created successfully", "request_id": new_request.id}
+        return {
+            "message": "On-demand request created successfully",
+            "request_id": new_request.id,
+            "request": {
+                "id": new_request.id,
+                "user_email": new_request.user_email,
+                "origin": new_request.origin,
+                "origin_lat": new_request.origin_lat,
+                "origin_lng": new_request.origin_lng,
+                "destination": new_request.destination,
+                "dest_lat": new_request.dest_lat,
+                "dest_lng": new_request.dest_lng,
+                "dest_place_id": new_request.dest_place_id,
+                "dest_address": new_request.dest_address,
+                "date": new_request.date,
+                "preferred_driver": new_request.preferred_driver,
+                "created_at": new_request.created_at.isoformat() if new_request.created_at else None
+            }
+        }
+    except HTTPException:
+        raise
     except Exception as e:
+        db.rollback()
+        print(f"On-demand request error: {e}")
         raise HTTPException(status_code=500, detail=f"Error creating request: {str(e)}")
 
 @app.get("/on-demand/drivers")
@@ -402,10 +555,16 @@ async def get_on_demand_requests(db: Session = Depends(get_db)):
                 "id": req.id,
                 "user_email": req.user_email,
                 "origin": req.origin,
+                "origin_lat": req.origin_lat,
+                "origin_lng": req.origin_lng,
                 "destination": req.destination,
+                "dest_lat": req.dest_lat,
+                "dest_lng": req.dest_lng,
+                "dest_place_id": req.dest_place_id,
+                "dest_address": req.dest_address,
                 "date": req.date,
                 "preferred_driver": req.preferred_driver,
-                "created_at": req.created_at
+                "created_at": req.created_at.isoformat() if req.created_at else None
             }
             for req in requests
         ]}

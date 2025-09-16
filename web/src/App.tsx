@@ -59,12 +59,15 @@ export default function App() {
   const [odDate, setOdDate] = useState<string>('')
   const [odDriver, setOdDriver] = useState<string>('')
   const [odDriverEnabled, setOdDriverEnabled] = useState<boolean>(false)
-  const [availableDrivers, setAvailableDrivers] = useState<string[]>([])
+  const [availableDrivers] = useState<string[]>([])  // Remove unused setter
   const [odRequests, setOdRequests] = useState<Array<{ id: number; origin_lat: number; origin_lng: number; destination: string; dest_lat: number; dest_lng: number; created_at: string }>>([])
   const [odSearch, setOdSearch] = useState('')
   const [odPage, setOdPage] = useState(1)
   const [odPageSize, setOdPageSize] = useState(10)
   const [originAddrCache, setOriginAddrCache] = useState<Record<string, string>>({})
+  const [userLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [radiusFilter] = useState<number>(5) // Default 5 miles
+  const [showRadiusFilter] = useState(false)
 
   // Google Places Autocomplete state (widget-based)
   const [gPlacesReady, setGPlacesReady] = useState(false)
@@ -190,13 +193,16 @@ export default function App() {
     if (mode !== 'on_demand') return
     ;(async () => {
       try {
-        const res = await fetch(`${API_BASE}/on_demand/requests`)
+        const res = await fetch(`${API_BASE}/on-demand/requests`)
         if (!res.ok) throw new Error(`Failed to load requests: ${res.status}`)
         const data = await res.json()
-        setOdRequests(data)
+        // Ensure data is an array - API might return {requests: [...]} or just [...]
+        const requests = Array.isArray(data) ? data : (data.requests || [])
+        setOdRequests(Array.isArray(requests) ? requests : [])
         setOdPage(1)
       } catch (e: any) {
         console.warn(e)
+        setOdRequests([]) // Ensure it's always an array even on error
       }
     })()
   }, [mode])
@@ -431,37 +437,28 @@ export default function App() {
   async function submitOnDemandRequestOd() {
     setOdError(null)
     setOdStatus('Submitting request...')
-    if (!authed) {
-      setOdError('Please log in to request a carpool')
-      setOdStatus(null)
-      navigate('/login')
-      return
-    }
-    if (!odOrigin) {
-      setOdError('Please detect your current location first')
-      setOdStatus(null)
-      return
-    }
-    if (!odDestCoord || !odDest.trim()) {
-      setOdError('Please enter and geocode a destination')
-      setOdStatus(null)
-      return
-    }
-    if (!odDate) {
-      setOdError('Please select a date')
-      setOdStatus(null)
-      return
-    }
-    if (odDriverEnabled && !odDriver) {
-      setOdError('Please select a driver')
-      setOdStatus(null)
-      return
-    }
     try {
+      // Get logged-in user email
+      const userEmail = localStorage.getItem('auth_user')
+      if (!userEmail) {
+        throw new Error('Please log in to submit a request')
+      }
+
+      // Validate required fields
+      if (!odOrigin?.lat || !odOrigin?.lng) {
+        throw new Error('Origin location is required. Please detect your current location first.')
+      }
+      
+      if (!odDestCoord?.lat || !odDestCoord?.lng) {
+        throw new Error('Destination coordinates are required. Please select a destination from the autocomplete.')
+      }
+
       const res = await fetch(`${API_BASE}/on-demand/requests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          user_email: userEmail,
+          origin: `${odOrigin.lat},${odOrigin.lng}`, // Convert coordinates to string
           origin_lat: odOrigin.lat,
           origin_lng: odOrigin.lng,
           destination: odDest.trim(),
@@ -470,7 +467,7 @@ export default function App() {
           dest_place_id: odDestPlaceId,
           dest_address: odDestAddress || odDest.trim(),
           date: odDate,
-          driver: odDriverEnabled ? odDriver : null,
+          preferred_driver: odDriverEnabled ? odDriver : null,
         })
       })
       if (!res.ok) {
@@ -486,8 +483,9 @@ export default function App() {
       setOdDriverEnabled(false)
       setOdOrigin(null)
       // refresh list
-      const list = await fetch(`${API_BASE}/on_demand/requests`).then(r => r.json()).catch(() => [])
-      setOdRequests(Array.isArray(list) ? list : [])
+      const list = await fetch(`${API_BASE}/on-demand/requests`).then(r => r.json()).catch(() => [])
+      const requests = Array.isArray(list) ? list : (list.requests || [])
+      setOdRequests(Array.isArray(requests) ? requests : [])
     } catch (e: any) {
       setOdError(e.message || 'Failed to submit request')
       setOdStatus(null)
@@ -511,17 +509,30 @@ export default function App() {
     }
   }
 
+  // Calculate distance between two coordinates using Haversine formula
+  function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const R = 3959 // Earth's radius in miles
+    const dLat = (lat2 - lat1) * Math.PI / 180
+    const dLng = (lng2 - lng1) * Math.PI / 180
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLng/2) * Math.sin(dLng/2)
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+    return R * c // Distance in miles
+  }
+
   useEffect(() => {
     if (mode !== 'on_demand' || odRequests.length === 0) return
     const filtered = odRequests.filter(r => {
-      const q = odSearch.trim().toLowerCase()
-      if (!q) return true
-      const addrKey = `${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`
-      const addr = originAddrCache[addrKey]
-      return (
-        r.destination.toLowerCase().includes(q) ||
-        addr.toLowerCase().includes(q)
-      )
+      // Add null checks for coordinates and ensure they are valid numbers
+      if (typeof r.origin_lat !== 'number' || typeof r.origin_lng !== 'number' || 
+          isNaN(r.origin_lat) || isNaN(r.origin_lng)) {
+        return !odSearch.trim().toLowerCase() || r.destination.toLowerCase().includes(odSearch.trim().toLowerCase())
+      }
+      
+      const addr = originAddrCache[`${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`] || ''
+      return !odSearch.trim().toLowerCase() || r.destination.toLowerCase().includes(odSearch.trim().toLowerCase()) || addr.toLowerCase().includes(odSearch.trim().toLowerCase())
     })
     const total = filtered.length
     const totalPages = Math.max(1, Math.ceil(total / odPageSize))
@@ -530,10 +541,54 @@ export default function App() {
     const pageItems = filtered.slice(start, start + odPageSize)
     // Prefetch reverse geocodes in parallel (best-effort)
     pageItems.forEach(item => {
-      const key = `${item.origin_lat.toFixed(5)},${item.origin_lng.toFixed(5)}`
-      if (!originAddrCache[key]) reverseGeocode(item.origin_lat, item.origin_lng)
+      if (typeof item.origin_lat === 'number' && typeof item.origin_lng === 'number' && 
+          !isNaN(item.origin_lat) && !isNaN(item.origin_lng)) {
+        const key = `${item.origin_lat.toFixed(5)},${item.origin_lng.toFixed(5)}`
+        if (!originAddrCache[key]) reverseGeocode(item.origin_lat, item.origin_lng)
+      }
     })
   }, [mode, odRequests, odSearch, odPage, odPageSize])
+
+  useEffect(() => {
+    if (mode !== 'on_demand' || odRequests.length === 0) return
+    const q = odSearch.trim().toLowerCase()
+    let filtered = odRequests.filter(r => {
+      // Add null checks for coordinates and ensure they are valid numbers
+      if (typeof r.origin_lat !== 'number' || typeof r.origin_lng !== 'number' || 
+          isNaN(r.origin_lat) || isNaN(r.origin_lng)) {
+        return !q || r.destination.toLowerCase().includes(q)
+      }
+      
+      const addr = originAddrCache[`${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`] || ''
+      return !q || r.destination.toLowerCase().includes(q) || addr.toLowerCase().includes(q)
+    })
+
+    // Apply radius filter if user location is available
+    if (userLocation && showRadiusFilter) {
+      filtered = filtered.filter(r => {
+        if (typeof r.origin_lat !== 'number' || typeof r.origin_lng !== 'number' || 
+            isNaN(r.origin_lat) || isNaN(r.origin_lng)) {
+          return false // Exclude requests without valid coordinates when filtering by location
+        }
+        const distance = calculateDistance(userLocation.lat, userLocation.lng, r.origin_lat, r.origin_lng)
+        return distance <= radiusFilter
+      })
+    }
+
+    const total = filtered.length
+    const totalPages = Math.max(1, Math.ceil(total / odPageSize))
+    const page = Math.min(odPage, totalPages)
+    const start = (page - 1) * odPageSize
+    const pageItems = filtered.slice(start, start + odPageSize)
+    // Prefetch reverse geocodes in parallel (best-effort)
+    pageItems.forEach(item => {
+      if (typeof item.origin_lat === 'number' && typeof item.origin_lng === 'number' && 
+          !isNaN(item.origin_lat) && !isNaN(item.origin_lng)) {
+        const key = `${item.origin_lat.toFixed(5)},${item.origin_lng.toFixed(5)}`
+        if (!originAddrCache[key]) reverseGeocode(item.origin_lat, item.origin_lng)
+      }
+    })
+  }, [mode, odRequests, odSearch, odPage, odPageSize, userLocation, showRadiusFilter, radiusFilter])
 
   function Nav() {
     const loc = useLocation()
@@ -582,7 +637,7 @@ export default function App() {
             </Link>
             <button 
               onClick={handleLogout} 
-              style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #ddd', backgroundColor: 'transparent', color: '#111', cursor: 'pointer', textDecoration: 'none' }}
+              style={{ padding: '0.5rem 0.75rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: 'pointer', textDecoration: 'none' }}
             >
               Log out
             </button>
@@ -604,7 +659,10 @@ export default function App() {
   return (
     <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#f7f7f8' }}>
       <div style={{ width: 'min(900px, 92vw)', background: '#fff', padding: '1.5rem', borderRadius: 12, boxShadow: '0 10px 30px rgba(0,0,0,0.06)', fontFamily: 'system-ui, sans-serif' }}>
-        <h1 style={{ marginTop: 0, marginBottom: '1rem' }}>Carpool</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginTop: 0, marginBottom: '1rem' }}>
+          <img src="/logo.svg" alt="Carpool" style={{ height: '40px', width: 'auto' }} />
+          <h1 style={{ margin: 0, color: '#1e40af', fontWeight: 'bold' }}>Carpool</h1>
+        </div>
         {/* Schedule type selector */}
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '0.75rem' }}>
           <span style={{ fontWeight: 600 }}>Schedule type:</span>
@@ -902,10 +960,29 @@ export default function App() {
                 {/* List with pagination */}
                 {(() => {
                   const q = odSearch.trim().toLowerCase()
-                  const filtered = odRequests.filter(r => {
+                  let filtered = odRequests.filter(r => {
+                    // Add null checks for coordinates and ensure they are valid numbers
+                    if (typeof r.origin_lat !== 'number' || typeof r.origin_lng !== 'number' || 
+                        isNaN(r.origin_lat) || isNaN(r.origin_lng)) {
+                      return !q || r.destination.toLowerCase().includes(q)
+                    }
+                    
                     const addr = originAddrCache[`${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`] || ''
                     return !q || r.destination.toLowerCase().includes(q) || addr.toLowerCase().includes(q)
                   })
+
+                  // Apply radius filter if user location is available
+                  if (userLocation && showRadiusFilter) {
+                    filtered = filtered.filter(r => {
+                      if (typeof r.origin_lat !== 'number' || typeof r.origin_lng !== 'number' || 
+                          isNaN(r.origin_lat) || isNaN(r.origin_lng)) {
+                        return false // Exclude requests without valid coordinates when filtering by location
+                      }
+                      const distance = calculateDistance(userLocation.lat, userLocation.lng, r.origin_lat, r.origin_lng)
+                      return distance <= radiusFilter
+                    })
+                  }
+
                   const total = filtered.length
                   const totalPages = Math.max(1, Math.ceil(total / odPageSize))
                   const page = Math.min(odPage, totalPages)
@@ -913,13 +990,26 @@ export default function App() {
                   const pageItems = filtered.slice(start, start + odPageSize)
                   return (
                     <div>
+                      {userLocation && showRadiusFilter && (
+                        <div style={{ marginBottom: '0.5rem', padding: '0.5rem', backgroundColor: '#f0f9ff', border: '1px solid #0ea5e9', borderRadius: 6, fontSize: '0.875rem' }}>
+                          📍 Showing requests within {radiusFilter} mile{radiusFilter !== 1 ? 's' : ''} of your location ({total} found)
+                        </div>
+                      )}
                       {pageItems.length === 0 ? (
-                        <div>No requests found.</div>
+                        <div>{userLocation && showRadiusFilter ? `No requests found within ${radiusFilter} miles of your location.` : 'No requests found.'}</div>
                       ) : (
                         <ul style={{ paddingLeft: '1rem' }}>
                           {pageItems.map((r) => {
-                            const key = `${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`
+                            // Add null checks for coordinates and ensure they are valid numbers
+                            const hasValidOrigin = typeof r.origin_lat === 'number' && typeof r.origin_lng === 'number' && 
+                                                  !isNaN(r.origin_lat) && !isNaN(r.origin_lng)
+                            const key = hasValidOrigin 
+                              ? `${r.origin_lat.toFixed(5)},${r.origin_lng.toFixed(5)}`
+                              : 'unknown-location'
                             const addr = originAddrCache[key]
+                            const distance = userLocation && hasValidOrigin 
+                              ? calculateDistance(userLocation.lat, userLocation.lng, r.origin_lat, r.origin_lng)
+                              : null
                             return (
                               <li key={r.id}>
                                 <strong>{new Date(r.created_at).toLocaleString()}</strong>
@@ -928,9 +1018,21 @@ export default function App() {
                                 {addr ? (
                                   <span>{addr}</span>
                                 ) : (
-                                  <a href={`https://www.google.com/maps?q=${r.origin_lat},${r.origin_lng}`} target="_blank" rel="noreferrer">{r.origin_lat.toFixed(5)},{r.origin_lng.toFixed(5)}</a>
+                                  hasValidOrigin ? (
+                                    <a href={`https://www.google.com/maps?q=${r.origin_lat},${r.origin_lng}`} target="_blank" rel="noreferrer">{r.origin_lat.toFixed(5)},{r.origin_lng.toFixed(5)}</a>
+                                  ) : (
+                                    <span>Unknown location</span>
+                                  )
                                 )}
-                                {' — Dest: '}<a href={`https://www.google.com/maps?q=${r.dest_lat},${r.dest_lng}`} target="_blank" rel="noreferrer">{r.dest_lat.toFixed(5)},{r.dest_lng.toFixed(5)}</a>
+                                {distance !== null && (
+                                  <span style={{ color: '#6b7280', fontSize: '0.875rem' }}> ({distance.toFixed(1)} mi away)</span>
+                                )}
+                                {' — Dest: '}
+                                {(typeof r.dest_lat === 'number' && typeof r.dest_lng === 'number' && !isNaN(r.dest_lat) && !isNaN(r.dest_lng)) ? (
+                                  <a href={`https://www.google.com/maps?q=${r.dest_lat},${r.dest_lng}`} target="_blank" rel="noreferrer">{r.dest_lat.toFixed(5)},{r.dest_lng.toFixed(5)}</a>
+                                ) : (
+                                  <span>{r.destination}</span>
+                                )}
                               </li>
                             )
                           })}

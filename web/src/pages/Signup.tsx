@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { API_BASE } from '../config'
 import { useNavigate } from 'react-router-dom'
+import { initializeGoogleAuth, renderGoogleButton, type GoogleUser } from '../utils/googleAuth'
 
 export default function Signup() {
   const navigate = useNavigate()
@@ -22,6 +23,34 @@ export default function Signup() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+
+  useEffect(() => {
+    // Initialize Google Auth when component mounts
+    initializeGoogleAuth().then(() => {
+      renderGoogleButton('google-signup-button', handleGoogleSuccess)
+    }).catch(err => {
+      console.error('Failed to initialize Google Auth:', err)
+    })
+  }, [])
+
+  const handleGoogleSuccess = (user: GoogleUser) => {
+    setSuccess(`Welcome ${user.name}! Account created successfully.`)
+    
+    // Store additional user info for session
+    localStorage.setItem('auth_user', user.email)
+    localStorage.setItem('user_name', user.name)
+    
+    // Trigger storage event for same-tab updates
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'auth_user',
+      newValue: user.email,
+      storageArea: localStorage
+    }))
+    
+    setTimeout(() => {
+      navigate('/')
+    }, 1000)
+  }
 
   function validate(): string | null {
     // Full name required
@@ -110,8 +139,12 @@ export default function Signup() {
   }
 
   return (
-    <form onSubmit={onSubmit} style={{ display: 'grid', gap: '0.75rem', maxWidth: 520 }}>
-      <h2 style={{ margin: 0 }}>Sign up</h2>
+    <form onSubmit={onSubmit} style={{ display: 'grid', gap: '1rem', maxWidth: 420 }}>
+      <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
+        <img src="/logo.svg" alt="Carpool" style={{ height: '60px', width: 'auto', marginBottom: '0.5rem' }} />
+        <h2 style={{ margin: 0, color: '#1e40af' }}>Join Carpool</h2>
+        <p style={{ margin: '0.5rem 0 0 0', color: '#666', fontSize: '0.9rem' }}>Create your account to get started</p>
+      </div>
 
       {/* Full Name */}
       <label style={{ display: 'grid', gap: '0.25rem' }}>
@@ -185,6 +218,7 @@ export default function Signup() {
       </fieldset>
 
       <button type="submit" disabled={loading} style={{ padding: '0.6rem 1rem', borderRadius: 6, backgroundColor: '#2563eb', color: 'white', border: 'none', cursor: loading ? 'not-allowed' : 'pointer' }}>{loading ? 'Creating account...' : 'Sign up'}</button>
+      <div id="google-signup-button" style={{ marginTop: '1rem' }}></div>
       {error && <div style={{ color: '#b00020' }}>{error}</div>}
       {success && <div style={{ color: '#0a7d28' }}>{success}</div>}
     </form>
